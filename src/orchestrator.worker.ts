@@ -12,20 +12,22 @@
  *  - Single WebSocket connection regardless of how many tabs are open
  *  - Eliminates per-tab bandwidth multiplication
  *  - Cross-tab state is authoritative and consistent by design
- *  - Centralised P&L math via Web Workers (offloaded from main thread)
+ *  - Stream coordination (valve, gate) offloaded from main thread
  *
  * TypeScript: add "lib": ["webworker"] to tsconfig for SharedWorkerGlobalScope.
  */
 
-import type {
-  WorkerInbound,
-  WorkerOutbound,
-  PriceTick,
-  PositionUpdate,
-  GreeksUpdate,
-} from "./types";
 import { BackpressureValve } from "./backpressure-valve";
 import { RenderGate } from "./render-gate";
+import type {
+  GreeksUpdate,
+  PositionUpdate,
+  PriceTick,
+  StreamId,
+  WorkerInbound,
+  WorkerOutbound,
+} from "./types";
+import { assertNever, byCorrelationId } from "./types";
 
 declare const self: SharedWorkerGlobalScope;
 
@@ -38,19 +40,54 @@ const WS_URL =
 
 // ─── Shared infrastructure ────────────────────────────────────────────────────
 
-/** All connected tab MessagePorts — used for direct port messages if needed. */
+/** All connected tab MessagePorts — tracked for lifecycle management. All fanout uses BroadcastChannel. */
 const ports = new Set<MessagePort>();
 
 /** Fanout channel — all tabs subscribe to this for snapshots. */
 const broadcast = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
 
-// ─── Pipeline ─────────────────────────────────────────────────────────────────
+// ─── Pipeline (v0.2.0) ───────────────────────────────────────────────────────────
 
-const renderGate = new RenderGate((snapshot) => {
-  broadcast.postMessage({
-    type: "snapshot",
-    payload: snapshot,
-  } satisfies WorkerOutbound);
+const renderGate = new RenderGate(
+  (snapshot) => {
+    broadcast.postMessage({
+      type: "snapshot",
+      payload: snapshot,
+    } satisfies WorkerOutbound);
+  },
+  {
+    // ── Coherence strategy ──────────────────────────────────────────────
+    // Swap to byEventTimestamp or byGlobalSequence per your feed protocol.
+    // When messages lack the configured field, the gate automatically falls
+    // back to wall-clock coherence (v0.1.0 behaviour).
+    coherenceKey: byCorrelationId,
+
+    // ── Stream freshness semantics ──────────────────────────────────────
+    streams: {
+      prices: { passThrough: true }, // valid-until-superseded
+      positions: { passThrough: false }, // invalid-if-stale
+      greeks: { passThrough: false, gapStrategy: "snapshot-fetch" },
+    },
+
+    // ── Hold timeout ────────────────────────────────────────────────────
+    // Set to p99 tail latency of your slowest downstream service.
+    holdTimeout: 200,
+  },
+);
+
+// Request snapshot on sequence gaps (globalSequence feeds only).
+// The backend endpoint must serve a point-in-time snapshot by sequence range.
+renderGate.onGap(({ stream, expectedSeq, receivedSeq }) => {
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(
+      JSON.stringify({
+        action: "snapshot-request",
+        stream,
+        fromSeq: expectedSeq,
+        toSeq: receivedSeq - 1,
+      }),
+    );
+  }
 });
 
 const valve = new BackpressureValve((ticks) => {
@@ -70,6 +107,10 @@ function connect(): void {
   ws = new WebSocket(WS_URL);
 
   ws.onopen = () => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
     reconnectDelay = 1_000;
     notify({ type: "connection-status", status: "connected" });
   };
@@ -84,6 +125,7 @@ function connect(): void {
 
   ws.onclose = () => {
     notify({ type: "connection-status", status: "reconnecting" });
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = setTimeout(() => {
       reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
       connect();
@@ -98,9 +140,28 @@ function connect(): void {
  * Adapt this to your actual wire protocol.
  *
  * Expected shape: { stream: 'prices' | 'positions' | 'greeks', payload: {...} }
+ *
+ * Causal metadata (correlationId, eventTimestamp, globalSequence) is carried
+ * on the payload objects and flows through the pipeline automatically.
  */
+const KNOWN_STREAMS = new Set<StreamId>(["prices", "positions", "greeks"]);
+
+function isKnownStream(s: string): s is StreamId {
+  return KNOWN_STREAMS.has(s as StreamId);
+}
+
 function route(msg: { stream: string; payload: unknown }): void {
-  switch (msg.stream) {
+  // Validate at the wire boundary — JSON.parse returns any, so we cannot
+  // trust msg.stream is a StreamId without a runtime check.
+  if (!isKnownStream(msg.stream)) {
+    // Unknown streams are ignored here (e.g. news, reference data on the same
+    // socket). Add to StreamId in types.ts and KNOWN_STREAMS to enable routing.
+    return;
+  }
+
+  const stream: StreamId = msg.stream;
+
+  switch (stream) {
     case "prices":
       valve.ingest(msg.payload as PriceTick);
       break;
@@ -111,7 +172,7 @@ function route(msg: { stream: string; payload: unknown }): void {
       renderGate.updateGreeks(msg.payload as GreeksUpdate);
       break;
     default:
-    // unknown stream — extend here for news, reference data, etc.
+      assertNever(stream);
   }
 }
 
@@ -146,6 +207,8 @@ function handleTabMessage(msg: WorkerInbound): void {
     case "set-active":
       valve.setActive(msg.instrumentId, msg.active);
       break;
+    default:
+      assertNever(msg);
   }
 }
 

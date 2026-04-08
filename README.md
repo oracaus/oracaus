@@ -1,109 +1,153 @@
-# Causally Consistent UI
+# Trading UI Pipeline
 
-The provided code focuses exclusively on the complex, real-time portion of the client-side architecture from _The Six Frontend Architecture Failures Nobody Solves Before Production_: coordinating live WebSocket streams through the SharedWorker, BackpressureValve, and RenderGate to ensure temporal coherence and prevent mathematically invalid P&L renders.
+A high-performance client-side architecture for real-time trading interfaces: shared-worker orchestration offloads the main thread, a backpressure valve conflates high-frequency ticks to display frame rate, and a render gate enforces causal consistency before every snapshot reaches the UI.
 
-## The pipeline
+## Motivation
 
+This boilerplate aims to solve the most difficult [frontend architecture problems nobody solves before production](https://www.linkedin.com/pulse/six-frontend-architecture-problems-nobody-solves-before-ka%C5%82ka-fdo2e/) in real-time trading UIs.
+
+## Architecture
+
+![Architecture diagram](./assets/architecture-blueprint.png)
+
+### Pipeline stages
+
+#### BackpressureValve
+
+Viewport-aware conflation. Throttles 2,000 ticks/sec to 60fps for visible instruments.
+
+![BackpressureValve diagram](./assets/backpressure-valve.png)
+
+#### RenderGate
+
+Coherence enforcement. Holds render until streams are causally consistent.
+
+![RenderGate diagram](./assets/render-gate.png)
+
+#### SharedWorker & BroadcastChannel
+
+Single WebSocket connection shared across all tabs. Distributes coherent snapshots to every open tab simultaneously.
+
+![SharedWorker multi-tab topology](./assets/shared-worker.png)
+
+### Stream freshness semantics
+
+| Stream    | passThrough | Meaning                                                               |
+| --------- | ----------- | --------------------------------------------------------------------- |
+| prices    | `true`      | Valid-until-superseded. Last known price is correct until next tick.  |
+| positions | `false`     | Invalid-if-stale. Must carry the triggering causal key (latest fill). |
+| greeks    | `false`     | Invalid-if-stale. Must reflect the latest reprice.                    |
+
+## Configuration
+
+```typescript
+import { RenderGate } from "./render-gate";
+import { byCorrelationId } from "./types";
+
+const gate = new RenderGate(
+  (snapshot) => {
+    /* distribute to consumers */
+  },
+  {
+    // Choose your coherence strategy:
+    coherenceKey: byCorrelationId, // or byEventTimestamp, byGlobalSequence
+
+    streams: {
+      prices: { passThrough: true },
+      positions: { passThrough: false },
+      greeks: { passThrough: false, gapStrategy: "snapshot-fetch" },
+    },
+
+    // p99 tail latency of your slowest downstream service
+    holdTimeout: 200,
+  },
+);
 ```
-Raw WebSocket (2,000 ticks/sec)
-         │
-         ▼
-┌───────────────────┐
-│                   │  Stage 1: drop unwatched instruments
-│ BackpressureValve │  Stage 2: classify by viewport × interaction
-│                   │  Stage 3: conflate + throttle to 60fps
-└────────┬──────────┘
-         │
-         ▼
-┌───────────────────┐
-│                   │  Hold render until Price, Position, Greeks
-│    RenderGate     │  are within 50ms of each other.
-│                   │  Prevents mathematically invalid P&L.
-└────────┬──────────┘
-         │
-         ▼
-┌───────────────────┐
-│   SharedWorker    │  Single WebSocket connection across all tabs.
-│  (Orchestrator)   │  Broadcasts CoherentSnapshot via BroadcastChannel.
-└────────┬──────────┘
-         │  BroadcastChannel
-         ▼
-┌─────────────────────────────┐
-│  Tab 1  │  Tab 2  │  Tab 3  │  All tabs see identical state.
-└─────────────────────────────┘
-```
 
-## File map
+### Coherence strategies
 
-| File                          | Layer              | Failure it prevents                                          |
-| ----------------------------- | ------------------ | ------------------------------------------------------------ |
-| `backpressure-valve.ts`       | Filter + throttle  | Browser freeze during volatility event                       |
-| `render-gate.ts`              | Causal consistency | Mathematically invalid P&L from mixed timestamps             |
-| `orchestrator.worker.ts`      | SharedWorker       | Diverged truth across tabs; multiplied WebSocket connections |
-| `client-bridge.ts`            | Tab interface      | Uncoordinated multi-tab state                                |
-| `react/use-trading-stream.ts` | React integration  | Subscription lifecycle leaks; stale viewport signals         |
+| Strategy           | Use when                                             | Properties                                                                 |
+| ------------------ | ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| `byCorrelationId`  | Backend stamps all fan-out messages with a shared ID | Cleanest. No time arithmetic. Requires backend instrumentation.            |
+| `byEventTimestamp` | Feed provides exchange-originating timestamps        | Works without backend modification. Fragile to pipeline time substitution. |
+| `byGlobalSequence` | Sequenced feeds (Solace, AMPS)                       | Most general. Requires gap detection config.                               |
 
-## Quick start
+### Wall-clock fallback
+
+When messages lack causal metadata, the extractor returns `null` and the gate automatically falls back to v0.1.0 wall-clock behaviour (50ms window). This makes v0.2.0 backwards-compatible with uninstrumented feeds.
+
+## React Usage
 
 ```tsx
-import { useTradingStream } from "./react/use-trading-stream";
+const { snapshot, connectionStatus } = useTradingStream({
+  instrumentIds: [instrumentId],
+  viewportIds: isVisible ? [instrumentId] : [],
+});
 
-function BlotterRow({ instrumentId }: { instrumentId: string }) {
-  const { snapshot, connectionStatus, sequenceId } = useTradingStream({
-    instrumentIds: [instrumentId],
-    viewportIds: isRowVisible ? [instrumentId] : [],
-  });
+if (!snapshot) return <Skeleton />;
 
-  if (!snapshot) return <Skeleton />;
+const price = snapshot.prices[instrumentId];
+const position = snapshot.positions[instrumentId];
+const pnl =
+  price && position ? (price.mid - position.avgCost) * position.quantity : null;
+```
 
-  const price = snapshot.prices[instrumentId];
-  const position = snapshot.positions[instrumentId];
+## Backend Requirements
 
-  // Safe to compute — RenderGate guarantees these are from
-  // the same logical moment in time.
-  const pnl =
-    price && position
-      ? (price.mid - position.avgCost) * position.quantity
-      : null;
+v0.2.0 identity-based coherence requires the backend to stamp messages with causal metadata:
 
-  return (
-    <tr>
-      <td>{price?.mid.toFixed(4)}</td>
-      <td>{position?.quantity}</td>
-      <td style={{ color: pnl != null && pnl < 0 ? "red" : "green" }}>
-        {pnl?.toFixed(2)}
-      </td>
-    </tr>
-  );
+```json
+{
+  "stream": "positions",
+  "payload": {
+    "instrumentId": "AAPL",
+    "quantity": 100,
+    "avgCost": 150.25,
+    "currency": "USD",
+    "timestamp": 1700000000000,
+    "correlationId": "FILL-456"
+  }
 }
 ```
 
-## What to wire up
+All messages produced by the same market event must share the same `correlationId` (or `eventTimestamp` / `globalSequence`). The frontend uses this to determine which messages are causally related.
 
-1. **`orchestrator.worker.ts`** — replace `WS_URL` and adapt the `route()` function
-   to your wire protocol. The expected shape is:
+If your feed does not yet emit causal metadata, the wall-clock path buys time while instrumentation is added.
 
-   ```json
-   { "stream": "prices", "payload": { "instrumentId": "EUR/USD", "bid": 1.08, ... } }
-   ```
+## Running Tests
 
-2. **Viewport signalling** — pass `viewportIds` from an `IntersectionObserver`
-   so the BackpressureValve can correctly classify off-screen instruments.
+```bash
+npm test
+```
 
-3. **Client-side threat model** — add TTL-based cache clearing on the
-   SharedWorker side for shared terminals. Position caching on a shared
-   terminal is a data exposure risk.
+The test suite includes:
 
-## Key architectural invariants
+- **D1**: Proves false coherence under v0.1.0 wall-clock, correct rejection under v0.2.0
+- **D2**: Proves false incoherence under v0.1.0, no suppression under v0.2.0
+- **D3**: Supersession (rapid fills before previous resolves)
+- **D4**: Wall-clock fallback compatibility
+- **D5**: Hold timeout behaviour
+- **D6**: passThrough semantics
+- **D7**: Gap detection (globalSequence)
+- **D8**: Alternative coherence strategies
+- **D9**: Snapshot correctness (sequenceId, record-copy safety, shallow-reference leak)
+- **D10**: Multi-instrument coherence
+- **D11**: Destroy cleanup
 
-- **Authoritative source**: the SharedWorker is the single source of truth.
-  REST snapshots are used only for initial load; the live stream supersedes them.
-- **Optimistic rollbacks**: not implemented here — add an optimistic state layer
-  above the snapshot in your state manager of choice. The library is the _last_
-  decision, not the first.
-- **Regulatory audit trail**: the `sequenceId` on each `CoherentSnapshot` gives
-  you a monotonic render ledger. Persist these if compliance requires a
-  client-side audit trail.
-- **Partial snapshots**: `isPartial: true` on a snapshot means the RenderGate
-  timed out waiting for full coherence. Consider suppressing tradeable actions
-  (order submission, limit edits) when `isPartial` is true.
+## File Structure
+
+```
+src/
+  types.ts                    — Domain types, CausalMetadata, extractors, StreamConfig
+  render-gate.ts              — Core coherence gate (causal + wall-clock fallback)
+  render-gate.test.ts         — 29 tests proving correctness
+  backpressure-valve.ts       — Viewport-aware tick conflation
+  orchestrator.worker.ts      — SharedWorker: single WS, pipeline wiring
+  client-bridge.ts            — Tab-side interface to the SharedWorker
+  react/
+    use-trading-stream.ts     — React hook for coherent snapshot consumption
+```
+
+## Author
+
+- [Przemyslaw Kalka](https://www.linkedin.com/in/przemyslawkalka/?locale=en)

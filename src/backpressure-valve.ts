@@ -1,14 +1,11 @@
 import type { InstrumentId, PriceTick, RenderPriority } from "./types";
+import { assertNever } from "./types";
 
 const TARGET_FPS = 60;
 const FRAME_BUDGET_MS = 1000 / TARGET_FPS; // ~16.67ms
 
 /**
  * The Backpressure Valve
- *
- * Backend engineers know rate limiting and load shedding.
- * Client engineers discover the need for them during a volatility event
- * when the browser freezes for five seconds.
  *
  * Three-stage filter pipeline:
  *
@@ -43,13 +40,16 @@ export class BackpressureValve {
   // ── Subscription control ────────────────────────────────────────────────────
 
   addWatched(ids: InstrumentId[]): void {
-    ids.forEach((id) => this.watched.add(id));
+    ids.forEach((id) => {
+      this.watched.add(id);
+    });
   }
 
   removeWatched(ids: InstrumentId[]): void {
     ids.forEach((id) => {
       this.watched.delete(id);
       this.pending.delete(id);
+      this.lastEmit.delete(id);
     });
   }
 
@@ -78,12 +78,21 @@ export class BackpressureValve {
     this.pending.set(id, tick);
 
     // Stage 3: schedule flush according to priority
-    if (priority === "high") {
-      this.scheduleFlush(0); // next microtask
-    } else if (priority === "medium") {
-      this.scheduleFlush(FRAME_BUDGET_MS);
+    switch (priority) {
+      case "high":
+        this.scheduleFlush(0); // next microtask
+        break;
+      case "medium":
+        this.scheduleFlush(FRAME_BUDGET_MS);
+        break;
+      case "low":
+        // Accumulates in pending; flushed on next scheduled frame.
+        break;
+      default:
+        // "drop" is already eliminated by the guard above; this arm catches
+        // any future RenderPriority variant that isn't explicitly handled.
+        assertNever(priority);
     }
-    // 'low' — accumulates in pending; flushed on next scheduled frame
   }
 
   // ── Internals ───────────────────────────────────────────────────────────────
@@ -106,7 +115,12 @@ export class BackpressureValve {
   }
 
   private scheduleFlush(delayMs: number): void {
-    if (this.frameHandle !== null) return;
+    if (this.frameHandle !== null) {
+      // Priority escalation: a 0-delay request preempts any pending longer-delay timer.
+      if (delayMs > 0) return;
+      clearTimeout(this.frameHandle);
+      this.frameHandle = null;
+    }
     this.frameHandle = setTimeout(() => {
       this.frameHandle = null;
       this.flush();
@@ -129,6 +143,7 @@ export class BackpressureValve {
     }
 
     if (toEmit.size > 0) this.onFlush(toEmit);
+    if (this.pending.size > 0) this.scheduleFlush(FRAME_BUDGET_MS);
   }
 
   destroy(): void {

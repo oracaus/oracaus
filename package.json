@@ -1,0 +1,58 @@
+{
+  "name": "trading-ui-pipeline",
+  "version": "0.2.0",
+  "description": "Causally consistent pipeline for real-time trading UIs",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/client-bridge.js",
+      "types": "./dist/client-bridge.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react/use-trading-stream.js",
+      "types": "./dist/react/use-trading-stream.d.ts"
+    },
+    "./types": {
+      "import": "./dist/types.js",
+      "types": "./dist/types.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "format": "biome format --write .",
+    "lint": "biome lint .",
+    "check": "biome check .",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "npx biome check --staged --no-errors-on-unmatched"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "keywords": [],
+  "author": "Przemyslaw Kalka",
+  "license": "MIT",
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.10",
+    "@types/react": "^19.2.14",
+    "simple-git-hooks": "^2.13.1",
+    "typescript": "^6.0.2",
+    "vitest": "^3.2.0"
+  }
+}

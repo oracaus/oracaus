@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { ClientBridge } from "../client-bridge";
-import type { CoherentSnapshot, InstrumentId } from "../types";
+import type {
+  CoherentSnapshot,
+  ConnectionStatus,
+  InstrumentId,
+} from "../types";
 
 // ─── Singleton bridge ─────────────────────────────────────────────────────────
 // One ClientBridge per tab, shared across the entire React tree.
@@ -12,9 +16,12 @@ function getBridge(): ClientBridge {
   return singleton;
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+export function destroyBridge(): void {
+  singleton?.destroy();
+  singleton = null;
+}
 
-export type ConnectionStatus = "connected" | "disconnected" | "reconnecting";
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface UseTradingStreamOptions {
   /** Instruments to subscribe to for live updates. */
@@ -93,7 +100,7 @@ export function useTradingStream({
     return () => {
       bridge.unsubscribe(instrumentIds);
     };
-  }, [instrumentIds]);
+  }, [instrumentIds, bridge.subscribe, bridge.unsubscribe]);
 
   // ── Viewport signalling ─────────────────────────────────────────────────────
 
@@ -103,10 +110,13 @@ export function useTradingStream({
     if (key === prevVpKey.current) return;
     prevVpKey.current = key;
     bridge.setViewport(ids);
-  }, [viewportIds, instrumentIds]);
+  }, [viewportIds, instrumentIds, bridge.setViewport]);
 
   // ── Snapshot + status listeners ─────────────────────────────────────────────
 
+  // [] is intentional: register listeners once on mount, remove on unmount.
+  // bridge is a stable module singleton — its method refs never change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: stable singleton, mount-only intent
   useEffect(() => {
     const unsubSnap = bridge.onSnapshot(setSnapshot);
     const unsubStatus = bridge.onStatus(setConnectionStatus);

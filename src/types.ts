@@ -1,64 +1,219 @@
-// ─── Domain types ────────────────────────────────────────────────────────────
+// ─── Domain primitives ───────────────────────────────────────────────────────
 
 export type InstrumentId = string;
 export type StreamId = "prices" | "positions" | "greeks";
 
-export interface PriceTick {
-  instrumentId: InstrumentId;
-  bid: number;
-  ask: number;
-  mid: number;
-  timestamp: number;
-}
-
-export interface PositionUpdate {
-  instrumentId: InstrumentId;
-  quantity: number;
-  avgCost: number;
-  currency: string;
-  timestamp: number;
-}
-
-export interface GreeksUpdate {
-  instrumentId: InstrumentId;
-  delta: number;
-  gamma: number;
-  vega: number;
-  theta: number;
-  timestamp: number;
-}
-
-// ─── Render Gate ─────────────────────────────────────────────────────────────
+// ─── Causal metadata ─────────────────────────────────────────────────────────
 
 /**
- * A snapshot where Price, Position and Greeks are causally consistent —
- * all derived from data that was valid at the same moment in time.
- * Mixing a t+1 price with a t+0 position produces mathematically
- * invalid P&L. This type is the contract that the RenderGate enforces.
+ * Stamp exactly one field per message, chosen by feed type:
+ *   correlationId  → event-driven fan-out (fills, risk events)
+ *   eventTimestamp → exchange-timestamped feeds
+ *   globalSequence → sequenced feeds (Solace, AMPS)
+ *
+ * All fields are optional — the gate falls back to wall-clock when all are absent.
+ */
+export interface CausalMetadata {
+  /** Shared by all messages produced by the same market event. */
+  correlationId?: string;
+
+  /**
+   * Exchange time of the originating event (ms UTC).
+   * Must be exchange time — server or client processing time corrupts the signal.
+   */
+  eventTimestamp?: number;
+
+  /**
+   * Monotonically increasing sequence number spanning all streams on one feed.
+   * Enables gap detection. Supported natively by Solace and AMPS.
+   */
+  globalSequence?: number;
+}
+
+// ─── Coherence key extraction ────────────────────────────────────────────────
+
+/**
+ * Extracts a causal identity string from a message. Returns null when the
+ * relevant field is absent, triggering wall-clock fallback.
+ *
+ * The `__sequenced?: never` brand prevents byGlobalSequence from being
+ * assigned here — that extractor returns SequencedCoherenceKeyExtractor,
+ * which forces the stricter config variant at the call site.
+ */
+export type CoherenceKeyExtractor = ((msg: CausalMetadata) => string | null) & {
+  readonly __sequenced?: never;
+};
+
+/**
+ * Returned by byGlobalSequence. Assigning this as coherenceKey narrows
+ * RenderGateConfig to its sequenced variant, making gapStrategy required
+ * on all streams at compile time.
+ */
+export interface SequencedCoherenceKeyExtractor {
+  (msg: CausalMetadata): string | null;
+  readonly __sequenced: true;
+}
+
+/** For event-driven fan-out feeds where the backend stamps a shared correlationId. */
+export const byCorrelationId: CoherenceKeyExtractor = (msg) =>
+  msg.correlationId ?? null;
+
+/**
+ * For exchange-timestamped feeds.
+ *
+ * Collision risk: independent events at the same millisecond share a key,
+ * producing false coherence — the same failure as v0.1.0 wall-clock.
+ * Avoid at HFT event rates (multiple events per ms).
+ */
+export const byEventTimestamp: CoherenceKeyExtractor = (msg) =>
+  msg.eventTimestamp != null ? String(msg.eventTimestamp) : null;
+
+/**
+ * For sequenced feeds (Solace, AMPS).
+ *
+ * Backend contract: all messages in a single fan-out batch (e.g. positions
+ * and greeks produced by one fill) must share the same sequence ID. A
+ * per-message counter means positions and greeks always carry different keys —
+ * the gate will never reach causal coherence and every event will emit partial.
+ *
+ * Returns SequencedCoherenceKeyExtractor, which enforces gapStrategy on all
+ * streams at compile time.
+ */
+export const byGlobalSequence: SequencedCoherenceKeyExtractor = Object.assign(
+  (msg: CausalMetadata): string | null =>
+    msg.globalSequence != null ? String(msg.globalSequence) : null,
+  { __sequenced: true as const },
+);
+
+// ─── Stream configuration ────────────────────────────────────────────────────
+
+export interface StreamConfig {
+  /**
+   * Freshness contract for this stream.
+   *
+   * false — invalid-if-stale: the gate holds until a message with the current
+   *   causal key arrives. Use when stale data is wrong: positions, greeks.
+   *
+   * true — valid-until-superseded: the last known value is accepted without a
+   *   matching causal key. Use when stale data is still correct: prices.
+   */
+  passThrough: boolean;
+
+  /**
+   * Policy for missing sequence numbers. Only active with byGlobalSequence.
+   * Required in SequencedStreamConfig; optional (inactive) otherwise.
+   *
+   * 'wait'           — hold and emit partial on timeout. Use for positions:
+   *                    a missing sequence may be an undelivered fill.
+   * 'snapshot-fetch' — same as wait, plus fires onGap so the orchestrator
+   *                    can request the missing data. Use for greeks.
+   * 'partial'        — advance past the gap without flagging isPartial.
+   *                    Use for prices: the next tick supersedes the missed one.
+   */
+  gapStrategy?: "wait" | "snapshot-fetch" | "partial";
+}
+
+/**
+ * Used when coherenceKey is byGlobalSequence. gapStrategy is required on
+ * every stream — each has different semantics for what a missing sequence means.
+ */
+export interface SequencedStreamConfig extends StreamConfig {
+  gapStrategy: "wait" | "snapshot-fetch" | "partial";
+}
+
+// ─── Branded domain primitives ───────────────────────────────────────────────
+//
+// Nominal types over primitives. TypeScript structurally equates number fields,
+// so without brands `delta` and `bid` are interchangeable — a silent logic error.
+// Cast once at ingestion boundaries (WebSocket parse, test factories) with
+// `value as Price`. Never cast inside the gate.
+
+declare const __brand: unique symbol;
+type Brand<T, B extends string> = T & { readonly [__brand]: B };
+
+/** Bid, ask, mid, or average cost in quote currency. */
+export type Price = Brand<number, "Price">;
+
+/** Signed position size. Positive = long, negative = short. */
+export type Quantity = Brand<number, "Quantity">;
+
+/** Milliseconds UTC. Exchange time or wall-clock — see context. */
+export type Timestamp = Brand<number, "Timestamp">;
+
+/** ISO 4217 currency code, e.g. "USD", "EUR". */
+export type CurrencyCode = Brand<string, "CurrencyCode">;
+
+/** d(option price) / d(underlying price). Range: [-1, 1]. */
+export type Delta = Brand<number, "Delta">;
+
+/** d(delta) / d(underlying price). Always positive. */
+export type Gamma = Brand<number, "Gamma">;
+
+/** d(option price) / d(1pt implied vol). Always positive for long options. */
+export type Vega = Brand<number, "Vega">;
+
+/** d(option price) / d(1 calendar day). Typically negative for long options. */
+export type Theta = Brand<number, "Theta">;
+
+// ─── Wire types ──────────────────────────────────────────────────────────────
+
+export interface PriceTick extends CausalMetadata {
+  instrumentId: InstrumentId;
+  bid: Price;
+  ask: Price;
+  mid: Price;
+  timestamp: Timestamp;
+}
+
+export interface PositionUpdate extends CausalMetadata {
+  instrumentId: InstrumentId;
+  quantity: Quantity;
+  avgCost: Price;
+  currency: CurrencyCode;
+  timestamp: Timestamp;
+}
+
+export interface GreeksUpdate extends CausalMetadata {
+  instrumentId: InstrumentId;
+  delta: Delta;
+  gamma: Gamma;
+  vega: Vega;
+  theta: Theta;
+  timestamp: Timestamp;
+}
+
+// ─── Render gate output ──────────────────────────────────────────────────────
+
+/**
+ * Prices, positions, and greeks verified to originate from the same market
+ * event. Safe to use for display and tradeable actions when isPartial is false.
+ *
+ * v0.1.0: coherence approximated by wall-clock arrival proximity (50ms window).
+ * v0.2.0: coherence verified by causal identity (correlationId / eventTimestamp
+ *   / globalSequence), with wall-clock fallback for uninstrumented feeds.
  */
 export interface CoherentSnapshot {
   prices: Record<InstrumentId, PriceTick>;
   positions: Record<InstrumentId, PositionUpdate>;
   greeks: Record<InstrumentId, GreeksUpdate>;
   sequenceId: number;
+  /** Wall-clock time of emission (ms UTC). */
   renderedAt: number;
-  /** True when the gate timed out waiting for full coherence. */
+  /** True when the gate timed out or was superseded before all streams resolved. */
   isPartial: boolean;
 }
 
-// ─── Render priority (Render Budget Matrix) ───────────────────────────────────
+// ─── Render priority (Render Budget Matrix) ──────────────────────────────────
 
 /**
- * Classification from the Render Budget Prioritization Matrix:
- *
- *               Off-screen    │    In Viewport
- * ──────────────────────────────────────────────
- * Active        low           │    high
- * Passive       drop          │    medium
+ *               Off-screen  │  In viewport
+ * ─────────────────────────────────────────
+ * Active           low      │    high
+ * Passive          drop     │    medium
  */
 export type RenderPriority = "high" | "medium" | "low" | "drop";
 
-// ─── Worker message bus ───────────────────────────────────────────────────────
+// ─── Worker message bus ──────────────────────────────────────────────────────
 
 export type WorkerInbound =
   | { type: "subscribe"; instrumentIds: InstrumentId[] }
@@ -66,18 +221,44 @@ export type WorkerInbound =
   | { type: "set-viewport"; instrumentIds: InstrumentId[] }
   | { type: "set-active"; instrumentId: InstrumentId; active: boolean };
 
+export type ConnectionStatus = "connected" | "disconnected" | "reconnecting";
+
 export type WorkerOutbound =
   | { type: "snapshot"; payload: CoherentSnapshot }
-  | {
-      type: "connection-status";
-      status: "connected" | "disconnected" | "reconnecting";
-    };
+  | { type: "connection-status"; status: ConnectionStatus };
 
-// ─── Internal pipeline state ──────────────────────────────────────────────────
+// ─── Internal pipeline state ─────────────────────────────────────────────────
 
 export interface StreamState {
   prices: Record<InstrumentId, PriceTick>;
   positions: Record<InstrumentId, PositionUpdate>;
   greeks: Record<InstrumentId, GreeksUpdate>;
+
+  /** Wall-clock arrival time per stream — used by the v0.1.0 fallback path. */
   lastUpdated: Record<StreamId, number>;
+
+  /** Most recent causal key per stream — used by identity-based coherence. */
+  lastCausalId: Record<StreamId, string | null>;
+
+  /** Most recent globalSequence per stream — used by gap detection. */
+  lastSequence: Record<StreamId, number>;
+}
+
+// ─── Gap detection ───────────────────────────────────────────────────────────
+
+export interface GapEvent {
+  stream: StreamId;
+  expectedSeq: number;
+  receivedSeq: number;
+}
+
+// ─── Exhaustiveness utilities ─────────────────────────────────────────────────
+
+/**
+ * Call in the `default` arm of a switch over a discriminated union.
+ * TypeScript errors at compile time if any variant is unhandled.
+ * Throws at runtime so unhandled variants surface immediately.
+ */
+export function assertNever(x: never): never {
+  throw new Error(`Unhandled variant: ${JSON.stringify(x)}`);
 }

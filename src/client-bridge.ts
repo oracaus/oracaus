@@ -1,16 +1,16 @@
 import type {
+  CoherentSnapshot,
+  ConnectionStatus,
+  InstrumentId,
   WorkerInbound,
   WorkerOutbound,
-  CoherentSnapshot,
-  InstrumentId,
 } from "./types";
+import { assertNever } from "./types";
 
 const BROADCAST_CHANNEL_NAME = "trading-orchestrator";
 
 type SnapshotHandler = (snapshot: CoherentSnapshot) => void;
-type StatusHandler = (
-  status: "connected" | "disconnected" | "reconnecting",
-) => void;
+type StatusHandler = (status: ConnectionStatus) => void;
 type UnsubscribeFn = () => void;
 
 /**
@@ -114,11 +114,17 @@ export class ClientBridge {
   private dispatch(msg: WorkerOutbound): void {
     switch (msg.type) {
       case "snapshot":
-        this.snapshotHandlers.forEach((h) => h(msg.payload));
+        this.snapshotHandlers.forEach((h) => {
+          h(msg.payload);
+        });
         break;
       case "connection-status":
-        this.statusHandlers.forEach((h) => h(msg.status));
+        this.statusHandlers.forEach((h) => {
+          h(msg.status);
+        });
         break;
+      default:
+        assertNever(msg);
     }
   }
 }

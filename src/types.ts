@@ -185,12 +185,15 @@ export interface GreeksUpdate extends CausalMetadata {
 // ─── Render gate output ──────────────────────────────────────────────────────
 
 /**
- * Prices, positions, and greeks verified to originate from the same market
- * event. Safe to use for display and tradeable actions when isPartial is false.
+ * Prices, positions, and Greeks verified to originate from the same market
+ * event, resolved per instrument. Safe to use for display and tradeable
+ * actions when:
+ *   - coherentInstruments.has(id) is true for the instruments being used, AND
+ *   - isPartial is false (no hold timer fired this cycle).
  *
  * v0.1.0: coherence approximated by wall-clock arrival proximity (50ms window).
- * v0.2.0: coherence verified by causal identity (correlationId / eventTimestamp
- *   / globalSequence), with wall-clock fallback for uninstrumented feeds.
+ * v0.2.0: coherence verified by causal identity, stream-level.
+ * v0.3.0: coherence verified by causal identity, per-instrument.
  */
 export interface CoherentSnapshot {
   prices: Record<InstrumentId, PriceTick>;
@@ -199,7 +202,45 @@ export interface CoherentSnapshot {
   sequenceId: number;
   /** Wall-clock time of emission (ms UTC). */
   renderedAt: number;
-  /** True when the gate timed out or was superseded before all streams resolved. */
+
+  /**
+   * Set of instruments for which all required streams carried the same
+   * causal key at emit time. An instrument is coherent when its position
+   * and greeks share the same correlationId (or equivalent causal key).
+   *
+   * Instruments absent from this set either:
+   *   - have not yet received data on all required streams (normal at startup), or
+   *   - are waiting for a non-passThrough stream to deliver a matching key.
+   *
+   * Use this for per-row staleness indicators in blotters. For cross-currency
+   * P&L aggregation, only include instruments present in this set.
+   *
+   * Note: the wall-clock fallback path does not populate this set — it emits
+   * all instruments as if coherent (same v0.1.0 behaviour). Per-instrument
+   * wall-clock tracking is a v0.4.0 concern.
+   */
+  coherentInstruments: ReadonlySet<InstrumentId>;
+
+  /**
+   * True when a hold timer fired for ≥1 instrument during this emit cycle.
+   *
+   * Precise semantics: at least one instrument's causal key was never matched
+   * on all non-passThrough streams within holdTimeout ms. The gate emitted
+   * rather than blocking the UI indefinitely.
+   *
+   * This is distinct from "some instruments haven't arrived yet" (normal at
+   * startup). isPartial specifically means "the gate gave up waiting" — a
+   * signal that the causal guarantee was sacrificed for liveness on ≥1
+   * instrument this cycle.
+   *
+   * Consumer contract:
+   *   isPartial = false, instrument in coherentInstruments  → safe for display
+   *     and tradeable actions.
+   *   isPartial = false, instrument NOT in coherentInstruments → still loading
+   *     or waiting for causal key match; treat as pending.
+   *   isPartial = true → ≥1 instrument's coherence was abandoned this cycle;
+   *     show staleness indicator; suppress P&L aggregation.
+   */
   isPartial: boolean;
 }
 
@@ -234,20 +275,38 @@ export interface StreamState {
   positions: Record<InstrumentId, PositionUpdate>;
   greeks: Record<InstrumentId, GreeksUpdate>;
 
-  /** Wall-clock arrival time per stream — used by the v0.1.0 fallback path. */
+  /** Wall-clock arrival time per stream — used by the wall-clock fallback path. */
   lastUpdated: Record<StreamId, number>;
 
-  /** Most recent causal key per stream — used by identity-based coherence. */
-  lastCausalId: Record<StreamId, string | null>;
+  /**
+   * Most recent causal key per stream per instrument.
+   *
+   * v0.2.0: Record<StreamId, string | null>                — one key per stream globally
+   * v0.3.0: Record<StreamId, Record<InstrumentId, string>> — per instrument
+   *
+   * A key is stored only after a non-null extraction. Absence means the
+   * instrument has never delivered a causal key on this stream.
+   */
+  lastCausalId: Record<StreamId, Record<InstrumentId, string>>;
 
-  /** Most recent globalSequence per stream — used by gap detection. */
-  lastSequence: Record<StreamId, number>;
+  /**
+   * Most recent globalSequence per stream per instrument.
+   *
+   * v0.2.0: Record<StreamId, number>                       — one counter per stream globally
+   * v0.3.0: Record<StreamId, Record<InstrumentId, number>> — per instrument
+   *
+   * Gap detection operates per-instrument: AAPL jumping seq 1→3 does not
+   * create a false gap for GOOG at seq 5→6.
+   */
+  lastSequence: Record<StreamId, Record<InstrumentId, number>>;
 }
 
 // ─── Gap detection ───────────────────────────────────────────────────────────
 
 export interface GapEvent {
   stream: StreamId;
+  /** Which instrument experienced the sequence gap. */
+  instrumentId: InstrumentId;
   expectedSeq: number;
   receivedSeq: number;
 }

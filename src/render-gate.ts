@@ -69,23 +69,32 @@ export type RenderGateConfig =
  * Guards the render loop against causally inconsistent snapshots.
  *
  * v0.1.0 asked: "did all streams update within the same time window?"
- * v0.2.0 asks:  "did all streams update in response to the same market event?"
+ * v0.2.0 asked: "did all streams update in response to the same market event?"
+ *               (stream-level: one pendingCausalKey globally)
+ * v0.3.0 asks:  "did all streams update in response to the same market event,
+ *               per instrument?"
+ *               (per-instrument: one pendingCausalKey per InstrumentId)
  *
- * Time is a proxy for causality. It breaks in both directions:
- *   - Independent events arriving close together → false coherence
- *   - Related events fanning out slowly → false incoherence, blocked UI
+ * The v0.2.0 stream-level gate broke on multi-instrument blotters: AAPL on
+ * "FILL-456" and GOOG on "FILL-789" caused mutual supersession — neither
+ * instrument ever reached coherence. v0.3.0 tracks causal state independently
+ * per instrument so AAPL and GOOG resolve without interference.
  *
- * v0.2.0 identifies causality directly via correlationId / eventTimestamp /
- * globalSequence, with automatic wall-clock fallback for uninstrumented feeds.
- *
- * Why this matters:
- *   - Price & Risk:   a tradeable price must not appear alongside a breached limit.
- *   - Price & Greeks: fresh spot must not appear alongside stale hedge ratios.
- *   - Multi-venue:    partial positions must not trigger false limit breaches.
+ * CoherentSnapshot.coherentInstruments reports which instruments are causally
+ * matched at each emit, enabling per-row staleness indicators and safe
+ * cross-currency P&L aggregation (only include coherent instruments).
  *
  * passThrough controls per-stream freshness:
  *   false → invalid-if-stale: must carry the triggering causal key (positions, greeks).
  *   true  → valid-until-superseded: last known value is accepted (prices).
+ *
+ * Emit policy: the gate is silent while waiting for causal resolution.
+ * It emits only on coherent resolution (any instrument) or on timer expiry.
+ * The wall-clock path emits when the stream-level timing window is satisfied.
+ *
+ * Wall-clock fallback remains stream-level (not per-instrument). It is the
+ * explicitly degraded mode for uninstrumented feeds; per-instrument wall-clock
+ * tracking is a v0.4.0 concern.
  */
 export class RenderGate {
   private state: StreamState = {
@@ -93,22 +102,51 @@ export class RenderGate {
     positions: {},
     greeks: {},
     lastUpdated: { prices: 0, positions: 0, greeks: 0 },
-    lastCausalId: { prices: null, positions: null, greeks: null },
-    lastSequence: { prices: 0, positions: 0, greeks: 0 },
+    lastCausalId: { prices: {}, positions: {}, greeks: {} },
+    lastSequence: { prices: {}, positions: {}, greeks: {} },
   };
 
   private sequenceId = 0;
-  private holdTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
-   * Causal key the gate is currently waiting on.
-   * Set when a non-passThrough stream delivers a new key.
-   * Cleared on any emit (coherent or partial) and on supersession.
+   * Per-instrument causal key currently being waited on.
+   * An entry exists iff the instrument has a non-passThrough update with a
+   * non-null causal key that has not yet resolved across all required streams.
    */
-  private pendingCausalKey: string | null = null;
+  private pendingCausalKeys = new Map<InstrumentId, string>();
 
-  /** Set when a sequence gap is detected; cleared only on a coherent emit. */
-  private hasUnresolvedGap = false;
+  /**
+   * Per-instrument hold timers. One timer per instrument waiting for its
+   * non-passThrough streams to deliver a matching causal key.
+   */
+  private holdTimers = new Map<InstrumentId, ReturnType<typeof setTimeout>>();
+
+  /**
+   * Per-instrument unresolved gap flag. Set when a sequence gap is detected
+   * for that instrument. Cleared on the first coherent delivery for that
+   * instrument — clearing it on timeout would let subsequent snapshots appear
+   * clean over a data hole.
+   */
+  private hasUnresolvedGaps = new Set<InstrumentId>();
+
+  /**
+   * Instruments that should make the next emit partial. Populated by:
+   *   - Hold timer expiry (gate gave up waiting for causal resolution).
+   *   - Coherent delivery after an unresolved gap (gap consumed, data missing).
+   * Cleared immediately inside emit() after consumption.
+   */
+  private partialThisCycle = new Set<InstrumentId>();
+
+  /**
+   * Incrementally maintained coherent set (causal path only).
+   * An instrument is in this set when it has resolved its causal key across
+   * all required streams and is not currently pending a new key.
+   *
+   * Updated at each state transition rather than rebuilt on every emit(),
+   * keeping emit() O(1) instead of O(N) for the causal path.
+   * The wall-clock path recomputes from state directly (stream-level semantics).
+   */
+  private _coherentInstruments = new Set<InstrumentId>();
 
   private readonly streamConfigs: Record<StreamId, ResolvedStreamConfig>;
   private readonly holdTimeout: number;
@@ -131,7 +169,6 @@ export class RenderGate {
     // The ?. accesses below are correct for StandardRenderGateConfig (streams
     // is optional). For SequencedRenderGateConfig the call site already
     // guarantees all streams are present, so the ?. is a no-op.
-    //
     // ─────────────────────────────────────────────────────────────────────────
     this.holdTimeout = config.holdTimeout ?? 200;
     this.wallClockWindow = config.wallClockWindow ?? 50;
@@ -172,30 +209,34 @@ export class RenderGate {
    *   - No gap detection: the BackpressureValve conflates intermediate ticks
    *     by design, making per-tick sequences meaningless and gaps false alarms.
    *
-   * Empty metadata is passed to tryEmit so the extractor returns null,
-   * routing through wall-clock — prevents a price-only update from triggering
-   * a causal emit.
+   * Price updates may satisfy a pending wall-clock wait. If all streams are
+   * now within the window, emit. If not, don't arm a timer — a timer will be
+   * armed when positions/greeks arrive (they're the non-passThrough signals).
    */
   updatePrices(ticks: Map<InstrumentId, PriceTick>): void {
     for (const [id, tick] of ticks) this.state.prices[id] = tick;
     this.state.lastUpdated.prices = Date.now();
-    this.tryEmit({});
+    if (this.isWallClockCoherent()) {
+      for (const id of [...this.holdTimers.keys()]) this.clearHoldTimer(id);
+      this.pendingCausalKeys.clear();
+      this.emit();
+    }
   }
 
   updatePositions(update: PositionUpdate): void {
-    if (!this.checkSequence("positions", update)) return;
+    if (!this.checkSequence("positions", update.instrumentId, update)) return;
     this.state.positions[update.instrumentId] = update;
     this.state.lastUpdated.positions = Date.now();
-    this.updateCausalId("positions", update);
-    this.tryEmit(update);
+    this.updateCausalId("positions", update.instrumentId, update);
+    this.tryEmit(update.instrumentId, update);
   }
 
   updateGreeks(update: GreeksUpdate): void {
-    if (!this.checkSequence("greeks", update)) return;
+    if (!this.checkSequence("greeks", update.instrumentId, update)) return;
     this.state.greeks[update.instrumentId] = update;
     this.state.lastUpdated.greeks = Date.now();
-    this.updateCausalId("greeks", update);
-    this.tryEmit(update);
+    this.updateCausalId("greeks", update.instrumentId, update);
+    this.tryEmit(update.instrumentId, update);
   }
 
   // ── Causal key tracking ────────────────────────────────────────────────────
@@ -204,35 +245,47 @@ export class RenderGate {
    * Store the causal key at the update site rather than re-extracting it
    * later from stored messages — avoids a fragile getLastMessage() pattern.
    */
-  private updateCausalId(streamId: StreamId, msg: CausalMetadata): void {
+  private updateCausalId(
+    streamId: StreamId,
+    instrumentId: InstrumentId,
+    msg: CausalMetadata,
+  ): void {
     if (this.streamConfigs[streamId].passThrough) return;
     const key = this.extractCausalKey(msg);
     if (key !== null) {
-      this.state.lastCausalId[streamId] = key;
+      this.state.lastCausalId[streamId][instrumentId] = key;
     }
   }
 
   // ── Gap detection ──────────────────────────────────────────────────────────
 
   /**
-   * Detect sequence gaps on globalSequence feeds. Always returns true —
-   * the message that revealed the gap is valid; the problem is the missing
-   * message before it.
+   * Detect sequence gaps on globalSequence feeds, per instrument. Always
+   * returns true — the message that revealed the gap is valid; the problem
+   * is the missing message before it.
    *
    * Per gapStrategy:
-   *   'wait'           — set hasUnresolvedGap, arm hold timer.
+   *   'wait'           — set hasUnresolvedGaps for this instrument, arm timer.
    *   'snapshot-fetch' — same, plus fire onGap so the orchestrator can fetch.
    *   'partial'        — advance past the gap silently; latest value wins.
+   *
+   * Gap detection is per-instrument: AAPL jumping seq 1→3 is an AAPL-specific
+   * problem and does not affect GOOG's sequence tracking.
    */
-  private checkSequence(streamId: StreamId, msg: CausalMetadata): boolean {
+  private checkSequence(
+    streamId: StreamId,
+    instrumentId: InstrumentId,
+    msg: CausalMetadata,
+  ): boolean {
     if (msg.globalSequence == null) return true;
 
-    const last = this.state.lastSequence[streamId];
     const seq = msg.globalSequence;
+    const last = this.state.lastSequence[streamId][instrumentId] ?? 0;
 
     if (last > 0 && seq !== last + 1) {
       const gap: GapEvent = {
         stream: streamId,
+        instrumentId,
         expectedSeq: last + 1,
         receivedSeq: seq,
       };
@@ -242,12 +295,14 @@ export class RenderGate {
       switch (strategy) {
         case "snapshot-fetch":
           this.onGapCallback?.(gap);
-          this.hasUnresolvedGap = true;
-          this.armHoldTimer();
+          this.hasUnresolvedGaps.add(instrumentId);
+          this._coherentInstruments.delete(instrumentId);
+          this.armHoldTimer(instrumentId);
           break;
         case "wait":
-          this.hasUnresolvedGap = true;
-          this.armHoldTimer();
+          this.hasUnresolvedGaps.add(instrumentId);
+          this._coherentInstruments.delete(instrumentId);
+          this.armHoldTimer(instrumentId);
           break;
         case "partial":
           // Latest value supersedes the missing one — snapshot is not degraded.
@@ -257,7 +312,7 @@ export class RenderGate {
       }
     }
 
-    this.state.lastSequence[streamId] = seq;
+    this.state.lastSequence[streamId][instrumentId] = seq;
     return true;
   }
 
@@ -265,85 +320,125 @@ export class RenderGate {
 
   /**
    * Route to causal or wall-clock coherence based on whether the triggering
-   * message carries a causal key.
+   * message carries a causal key. Called for position and greeks updates.
    */
-  private tryEmit(triggeringMsg: CausalMetadata): void {
+  private tryEmit(
+    instrumentId: InstrumentId,
+    triggeringMsg: CausalMetadata,
+  ): void {
     const causalKey = this.extractCausalKey(triggeringMsg);
 
     if (causalKey !== null) {
-      this.tryEmitCausal(causalKey);
+      this.tryEmitCausal(instrumentId, causalKey);
     } else {
-      this.tryEmitWallClock();
+      this.tryEmitWallClock(instrumentId);
     }
   }
 
   /**
-   * Identity-based coherence (primary path).
+   * Identity-based coherence (primary path), per instrument.
    *
-   * Three cases:
+   * Three cases for this instrument:
    *   No pending key       → adopt key, check coherence, emit or arm timer.
    *   Same key as pending  → recheck (another stream may have just caught up).
-   *   Different key        → supersession: emit partial for the stale key,
-   *                          adopt the new one, recheck.
+   *   Different key        → supersession: replace the pending key silently,
+   *                          recheck with the new key. No immediate partial emit
+   *                          — coherentInstruments on the next regular emit
+   *                          implicitly signals that this instrument is in-flight.
+   *
+   * Supersessions for instrument A do not affect instrument B's pending state.
+   * This is the core v0.3.0 fix over v0.2.0 stream-level tracking.
+   *
+   * The gate is silent while waiting. It emits only when:
+   *   - This instrument reaches coherence (causal key matched on all streams).
+   *   - The hold timer fires (see armHoldTimer).
    */
-  private tryEmitCausal(causalKey: string): void {
-    if (this.pendingCausalKey !== null && this.pendingCausalKey !== causalKey) {
-      // New event arrived before the previous one resolved — emit partial and move on.
-      this.clearHoldTimer();
-      this.emit(true);
+  private tryEmitCausal(instrumentId: InstrumentId, causalKey: string): void {
+    const existingKey = this.pendingCausalKeys.get(instrumentId);
+
+    if (existingKey !== undefined && existingKey !== causalKey) {
+      // Supersession for this instrument only. Clear the old timer and adopt
+      // the new key. No partial emit — the new key may resolve quickly, and
+      // coherentInstruments on the next emit implicitly signals in-flight state.
+      this.clearHoldTimer(instrumentId);
+      this._coherentInstruments.delete(instrumentId);
     }
 
-    this.pendingCausalKey = causalKey;
+    this.pendingCausalKeys.set(instrumentId, causalKey);
 
-    if (this.isCoherentForKey(causalKey)) {
-      this.clearHoldTimer();
-      this.pendingCausalKey = null;
-      this.emit(this.hasUnresolvedGap);
-      this.hasUnresolvedGap = false;
+    if (this.isInstrumentCoherent(instrumentId, causalKey)) {
+      this.clearHoldTimer(instrumentId);
+      this.pendingCausalKeys.delete(instrumentId);
+      // Consume the gap flag: this coherent delivery is the first clean snapshot
+      // after the gap. Mark partial so consumers know history has a hole, then
+      // clear so subsequent emits are clean.
+      if (this.hasUnresolvedGaps.has(instrumentId)) {
+        this.partialThisCycle.add(instrumentId);
+        this.hasUnresolvedGaps.delete(instrumentId);
+      }
+      this._coherentInstruments.add(instrumentId);
+      this.emit();
     } else {
-      this.armHoldTimer();
+      this.armHoldTimer(instrumentId);
     }
   }
 
   /**
-   * Wall-clock coherence (fallback path).
-   * Active when the extractor returns null — feed is uninstrumented or the
-   * relevant metadata field is absent from this message.
+   * Wall-clock coherence (fallback path), called when the triggering message
+   * carries no causal key.
    *
-   * Clears pendingCausalKey on coherent emit: a wall-clock resolution closes
-   * any in-flight causal wait. Without this, a late delivery of the pending
-   * key would re-enter tryEmitCausal and emit a second snapshot for the same event.
+   * If the stream-level timing window is satisfied, emit and clear any pending
+   * causal state — a wall-clock resolution closes any in-flight causal wait.
+   * Without this, a late delivery of a pending key would re-enter
+   * tryEmitCausal and emit a second snapshot for the same event.
+   *
+   * If not yet coherent, arm a per-instrument hold timer so we can emit
+   * partial after holdTimeout if the feed never becomes coherent.
+   *
+   * Operates at stream level (not per-instrument) — this is the documented
+   * limitation of the wall-clock fallback. All instruments with data on all
+   * streams are added to coherentInstruments as a group.
    */
-  private tryEmitWallClock(): void {
+  private tryEmitWallClock(instrumentId: InstrumentId): void {
     if (this.isWallClockCoherent()) {
-      this.clearHoldTimer();
-      this.pendingCausalKey = null;
-      this.emit(this.hasUnresolvedGap);
-      this.hasUnresolvedGap = false;
+      // Clear all per-instrument causal state — wall-clock coherence resolves
+      // any pending causal waits across all instruments.
+      for (const id of [...this.holdTimers.keys()]) this.clearHoldTimer(id);
+      this.pendingCausalKeys.clear();
+      this.emit();
     } else {
-      this.armHoldTimer();
+      // Not coherent yet. Arm a timer for this instrument so we emit partial
+      // after holdTimeout if the feed never converges.
+      this.armHoldTimer(instrumentId);
     }
   }
 
   // ── Coherence checks ──────────────────────────────────────────────────────
 
   /**
-   * True when every required stream is ready for the given key.
+   * True when every required stream is ready for the given instrument and key.
    *
-   * passThrough streams: any historical update suffices (valid-until-superseded).
-   * non-passThrough streams: lastCausalId must match exactly (invalid-if-stale).
-   *
-   * This is the consistent-cut condition from Chandy-Lamport: has every
-   * channel delivered its marker? The causal key is the marker.
+   * passThrough streams: any historical update for this instrument suffices
+   *   (valid-until-superseded). Checked per-instrument: AAPL can be coherent
+   *   even if GOOG has no price yet.
+   * non-passThrough streams: lastCausalId[stream][instrumentId] must match
+   *   exactly (invalid-if-stale).
    */
-  private isCoherentForKey(causalKey: string): boolean {
+  private isInstrumentCoherent(
+    instrumentId: InstrumentId,
+    causalKey: string,
+  ): boolean {
     for (const streamId of REQUIRED_STREAMS) {
       const config = this.streamConfigs[streamId];
 
       if (config.passThrough) {
-        if (this.state.lastUpdated[streamId] === 0) return false;
+        // Any historical data for this instrument suffices.
+        if (this.state[streamId][instrumentId] === undefined) return false;
       } else {
-        if (this.state.lastCausalId[streamId] !== causalKey) return false;
+        // Must carry the exact causal key for this specific instrument.
+        if (this.state.lastCausalId[streamId][instrumentId] !== causalKey) {
+          return false;
+        }
       }
     }
     return true;
@@ -364,46 +459,106 @@ export class RenderGate {
   // ── Timer management ───────────────────────────────────────────────────────
 
   /**
-   * Start the hold timer. On expiry, emit partial — the gate has waited as
-   * long as operationally justified and must not block the UI further.
+   * Start the hold timer for a specific instrument. On expiry, emit partial —
+   * the gate has waited as long as operationally justified for this instrument.
    *
-   * Does not clear hasUnresolvedGap: a timeout means the missing data never
-   * arrived. Only a confirmed coherent delivery should clear the gap flag;
-   * clearing it here would let subsequent snapshots appear clean over a hole.
+   * partialThisCycle is set so the next emit() call marks isPartial = true.
+   * hasUnresolvedGaps is NOT cleared on timeout — only a coherent delivery
+   * should clear it. Clearing it here would let subsequent snapshots appear
+   * clean over a data hole.
    */
-  private armHoldTimer(): void {
-    if (this.holdTimer !== null) return;
-    this.holdTimer = setTimeout(() => {
-      this.holdTimer = null;
-      this.pendingCausalKey = null;
-      this.emit(true);
+  private armHoldTimer(instrumentId: InstrumentId): void {
+    if (this.holdTimers.has(instrumentId)) return;
+    const timer = setTimeout(() => {
+      this.holdTimers.delete(instrumentId);
+      this.pendingCausalKeys.delete(instrumentId);
+      this._coherentInstruments.delete(instrumentId);
+      this.partialThisCycle.add(instrumentId);
+      this.emit();
     }, this.holdTimeout);
+    this.holdTimers.set(instrumentId, timer);
   }
 
-  private clearHoldTimer(): void {
-    if (this.holdTimer !== null) {
-      clearTimeout(this.holdTimer);
-      this.holdTimer = null;
+  private clearHoldTimer(instrumentId: InstrumentId): void {
+    const timer = this.holdTimers.get(instrumentId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.holdTimers.delete(instrumentId);
     }
   }
 
   // ── Emit ───────────────────────────────────────────────────────────────────
 
-  private emit(isPartial: boolean): void {
+  /**
+   * Emit a snapshot.
+   *
+   * Wall-clock path: recomputes coherentInstruments from state — all instruments
+   * with data on every required stream are coherent (v0.1.0 stream-level semantics).
+   * O(N) scan is acceptable here: the wall-clock path is the degraded fallback for
+   * uninstrumented feeds, not the hot path.
+   *
+   * Causal path: copies _coherentInstruments, which is maintained incrementally at
+   * each state transition (coherence, supersession, hold timeout, gap). O(1) per
+   * emit, making the causal path O(N) total for an N-instrument rebalance instead
+   * of the previous O(N²).
+   *
+   * isPartial = true iff partialThisCycle is non-empty, meaning:
+   *   - A hold timer fired for ≥1 instrument (gate gave up on causal resolution), OR
+   *   - A coherent delivery resolved after a known sequence gap (data hole exists).
+   * partialThisCycle is cleared immediately after consumption.
+   */
+  private emit(): void {
+    const wallClockCoherent = this.isWallClockCoherent();
+
+    let coherentInstruments: Set<InstrumentId>;
+
+    if (wallClockCoherent) {
+      // Wall-clock fallback: scan all known instruments (stream-level semantics).
+      coherentInstruments = new Set<InstrumentId>();
+      const allInstruments = new Set<InstrumentId>([
+        ...Object.keys(this.state.positions),
+        ...Object.keys(this.state.greeks),
+      ]);
+      for (const id of allInstruments) {
+        if (this.hasInstrumentDataWallClock(id)) coherentInstruments.add(id);
+      }
+    } else {
+      // Causal path: O(1) — copy the incrementally maintained set.
+      coherentInstruments = new Set(this._coherentInstruments);
+    }
+
+    const isPartial = this.partialThisCycle.size > 0;
+    this.partialThisCycle.clear();
+
     this.onSnapshot({
       prices: { ...this.state.prices },
       positions: { ...this.state.positions },
       greeks: { ...this.state.greeks },
       sequenceId: ++this.sequenceId,
       renderedAt: Date.now(),
+      coherentInstruments,
       isPartial,
     });
+  }
+
+  /**
+   * True when the instrument has actual data on every required stream.
+   * Used in the wall-clock path — wall-clock deliveries don't populate
+   * lastCausalId, so we check the data stores directly.
+   */
+  private hasInstrumentDataWallClock(instrumentId: InstrumentId): boolean {
+    for (const streamId of REQUIRED_STREAMS) {
+      if (this.state[streamId][instrumentId] === undefined) return false;
+    }
+    return true;
   }
 
   // ── Cleanup ────────────────────────────────────────────────────────────────
 
   destroy(): void {
-    this.clearHoldTimer();
+    for (const timer of this.holdTimers.values()) clearTimeout(timer);
+    this.holdTimers.clear();
+    this._coherentInstruments.clear();
     this.onGapCallback = undefined;
   }
 }

@@ -12,6 +12,7 @@ This solves the most difficult [frontend architecture problems nobody solves bef
 - **False coherence (v0.2.0)**: A price tick from one fill and a Greeks update from a different fill arrive within the same 50ms wall-clock window and are presented as a coherent snapshot. A tradeable quote is computed against the wrong hedge ratios.
 - **False incoherence (v0.2.0)**: A legitimate fill fans out slowly — the Greeks engine takes 60ms, beyond the 50ms wall-clock window. The gate withholds execution. The trader sees a stale blotter.
 - **Operational paralysis under concurrent fills (v0.3.0)**: When AAPL's fill (`"FILL-456"`) and GOOG's fill (`"FILL-789"`) overlap in time, they mutually supersede each other's pending causal key at the stream level. The gate ping-pongs between keys indefinitely — neither instrument ever reaches coherence, and the gate emits a continuous stream of partials. `isPartial`, designed as a brief safety valve during fills, becomes the permanent default state. The collision probability grows with blotter size and fill rate, but two concurrently active instruments are enough to trigger it.
+- **False incoherence under fast reprice (v0.4.0)**: With a sequenced feed, Greeks run on a faster reprice loop than fills. A fill from 10s ago paired with a Greeks snapshot from 2s ago is arithmetically valid (per-unit sensitivities × current quantity), but v0.3.0's equality rule across causal keys withholds it. Instruments bounce out of `coherentInstruments` on every reprice; portfolio aggregates go `null` under healthy idle state. v0.4.0's `freshness: "monotonic"` relaxes the rule to `dependent.key ≥ anchor.key` on orderable extractors (`byEventTimestamp`, `byGlobalSequence`).
 
 ## Architecture
 
@@ -59,10 +60,18 @@ const gate = new RenderGate(
   {
     coherenceKey: byCorrelationId, // or byEventTimestamp, byGlobalSequence
 
+    // The non-passThrough stream whose key is the reference for all others.
+    // Required in v0.4.0. Must be a declared non-passThrough stream.
+    anchorStream: "positions",
+
     streams: {
       prices: { passThrough: true },
-      positions: { passThrough: false },
-      greeks: { passThrough: false },
+      // Anchor matches itself — "match" is the only valid freshness here.
+      positions: { passThrough: false, freshness: "match" },
+      // Monotonic: greeks.key ≥ positions.key is sufficient. Requires an
+      // orderable extractor (byEventTimestamp or byGlobalSequence). Under
+      // byCorrelationId, only "match" is valid at runtime.
+      greeks: { passThrough: false, freshness: "match" },
       // gapStrategy applies to byGlobalSequence feeds only — see coherence strategies table
     },
 
@@ -71,6 +80,17 @@ const gate = new RenderGate(
   },
 );
 ```
+
+### Freshness: `"match"` vs `"monotonic"` (v0.4.0)
+
+Per-stream. Governs how a non-passThrough stream's causal key is compared against the anchor's:
+
+| Freshness     | Rule                            | Valid extractors                                  | Use when                                                                                                       |
+| ------------- | ------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `"match"`     | `stream.key === anchor.key`     | all                                               | Default. Dependent stream is produced whole with the anchor (fan-out fills). `byCorrelationId` supports only this. |
+| `"monotonic"` | `compare(stream.key, anchor.key) ≥ 0` | `byEventTimestamp`, `byGlobalSequence`          | Dependent stream is a pure function of market state and may run ahead of the anchor (Greeks on a fast reprice loop vs. slower fill cadence). |
+
+The anchor itself is always `"match"` (it is its own reference). Attempting `"monotonic"` with `byCorrelationId` throws at construction — correlation IDs are opaque strings, not orderable.
 
 ### Coherence strategies
 
@@ -138,26 +158,28 @@ function BlotterRow({ id }: { id: string }) {
 }
 ```
 
-### Safe cross-currency P&L aggregation
+### Portfolio delta exposure
 
 ```typescript
-function computePortfolioPnl(snapshot: CoherentSnapshot): number | null {
-  // Suppress aggregation if any instrument's coherence was abandoned this cycle
+function portfolioDeltaExposure(snapshot: CoherentSnapshot): number | null {
   if (snapshot.isPartial) return null;
 
-  let total = 0;
-  for (const [id, position] of Object.entries(snapshot.positions)) {
-    // Skip instruments that are causally pending
+  let exposure = 0;
+  for (const [id, pos] of Object.entries(snapshot.positions)) {
     if (!snapshot.coherentInstruments.has(id)) continue;
-
-    const price = snapshot.prices[id];
-    if (!price) continue;
-
-    total += (price.mid - position.avgCost) * position.quantity;
+    const g = snapshot.greeks[id];
+    if (!g) continue;
+    exposure += pos.quantity * g.delta;
   }
-  return total;
+  return exposure;
 }
 ```
+
+This is where causal coherence earns its keep. `pos.quantity * g.delta` combines two `passThrough: false` streams — a position from one fill and Greeks computed for the _same_ fill. If AAPL's position reflects `"FILL-789"` but the Greeks engine is still returning values computed against `"FILL-456"`, the delta is wrong for this position, and the exposure contribution is wrong. `coherentInstruments.has(id)` is the per-instrument guard that prevents this: AAPL only appears in the set once position and Greeks both carry the matching causal key.
+
+Note the contrast with a price-only P&L calculation like `(price.mid - pos.avgCost) * pos.quantity`: prices are `passThrough: true`, the position's `avgCost` is a field on the position record itself, and both are correct in isolation regardless of Greeks state. That calculation does not need a coherence guard — which is exactly why the interesting example to show is this one.
+
+`isPartial` guards _portfolio completeness_, not per-instrument correctness. When an instrument times out, it drops out of `coherentInstruments` and the loop skips it — but for a portfolio-aggregated risk number like delta exposure, a silently dropped leg understates the true exposure (the missing instrument may carry the largest delta). Returning `null` signals "the aggregate is not trustworthy right now" rather than showing a number that looks complete but isn't. Per-row consumers (the blotter row above) don't need this guard because they scope to a single instrument; portfolio-level risk aggregates do.
 
 ## React Usage
 
@@ -210,7 +232,7 @@ If your feed does not yet emit causal metadata, the wall-clock path buys time wh
 npm test
 ```
 
-36 tests across 16 suites:
+46 tests across 23 suites:
 
 | Suite | What it proves                                                                                                                 |
 | ----- | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -230,6 +252,13 @@ npm test
 | D14   | Destroy: all per-instrument timers cleared, no emit after destroy                                                              |
 | D15   | Cross-instrument independence: 500 instruments with independent fills, all resolve, 0 partials                                 |
 | D16   | Mixed-latency blotter: fast instruments coherent before slow, timeouts isolated                                                |
+| D17   | Monotonic freshness under `byEventTimestamp`: Greeks newer than position → coherent (v0.3.0 would withhold)                    |
+| D18   | Monotonic freshness under `byGlobalSequence`: Greeks sequence > position sequence → coherent                                   |
+| D19   | Monotonic — negative case: Greeks older than position still withheld (proves we haven't relaxed too far)                       |
+| D20   | Monotonic — Greeks-before-position arrival order: resolves when position catches up with key ≤ buffered Greeks                 |
+| D21   | Monotonic — hold timer cancels when dependent catches up to anchor                                                             |
+| D22   | Validation: `freshness: "monotonic"` throws at construction under `byCorrelationId` or on a `passThrough` stream, and when `anchorStream` is omitted |
+| D23   | Validation: `anchorStream` must name a declared non-passThrough stream                                                         |
 
 ## Running Benchmarks
 
@@ -245,25 +274,25 @@ Gate Latency — False Coherence Rate
   v0.3.0 causal     :    0% (key mismatch detected, correctly withheld)
 
 Gate Throughput — Single-instrument
-  passthrough (identity)  : ~1,186k ops/sec
-  v0.1.0 wall-clock       : ~1,155k ops/sec
-  v0.3.0 causal           : ~1,169k ops/sec
+  passthrough (identity)  : ~1,209k ops/sec
+  v0.1.0 wall-clock       : ~1,171k ops/sec
+  v0.3.0 causal           : ~1,268k ops/sec
 
 Gate Throughput — Multi-instrument scaling (v0.3.0 vs passthrough identity)
-  10 instruments    : ~88.5k / ~91.2k ops/sec  (v0.3.0 / passthrough)
+  10 instruments    : ~86.8k / ~90.3k ops/sec  (v0.3.0 / passthrough)
   50 instruments    :  ~3.2k /  ~3.1k ops/sec
-  100 instruments   :   ~574 /   ~574 ops/sec
-  500 instruments   :  ~16.4 /  ~19.6 ops/sec
+  100 instruments   :   ~576 /   ~573 ops/sec
+  500 instruments   :  ~15.9 /  ~19.6 ops/sec
 
 Gate Throughput — Mixed causal fraction (100 instruments)
-  100% instrumented : ~1,172 ops/sec
-   50% instrumented :   ~796 ops/sec
-    0% instrumented :   ~602 ops/sec
+  100% instrumented : ~1,139 ops/sec
+   50% instrumented :   ~792 ops/sec
+    0% instrumented :   ~595 ops/sec
 ```
 
-At 1–100 instruments, v0.3.0 causal tracking adds no measurable overhead over the passthrough baseline — single-instrument variance sits in the ~2% band, well within JIT/GC noise (the ordering between the three variants flips between runs). At 500 instruments the overhead is ~1.2x (16.4 vs 19.6 ops/sec), explained by the bench's synchronous delivery pattern: `emit()` fires once per instrument with an O(N) object spread each time, O(N²) total in snapshot construction. In production this does not occur — fills arrive over real time as WebSocket messages, emits are spread across hundreds of milliseconds, and the BackpressureValve conflates ticks before the render layer. **v0.4.0's batched emit collapses this from O(N²) to O(N) even under the bench's synchronous load** (see "Coming in v0.4.0" below).
+At 1–100 instruments, v0.3.0 causal tracking adds no measurable overhead over the passthrough baseline — single-instrument variance sits within JIT/GC noise (the ordering between the three variants flips between runs; in this run v0.3.0 causal is nominally _faster_ than passthrough by ~5%). At 500 instruments the overhead is ~1.23x (15.9 vs 19.6 ops/sec), explained by the bench's synchronous delivery pattern: `emit()` fires once per instrument with an O(N) object spread each time, O(N²) total in snapshot construction. The 500-instrument causal run also shows higher variance (rme ±7.3% vs ±0.1–0.6% at smaller scales) — another symptom of the O(N²) regime where a handful of GC pauses dominate the ten samples. In production this does not occur — fills arrive over real time as WebSocket messages, emits are spread across hundreds of milliseconds, and the BackpressureValve conflates ticks before the render layer. **v0.5.0's batched emit collapses this from O(N²) to O(N) even under the bench's synchronous load** (see "Coming in v0.5.0" below).
 
-The mixed causal fraction numbers deserve a note: 100% instrumented is ~1.95x faster than 0% (pure wall-clock), which looks counterintuitive until you count emits. Once the wall-clock gate becomes coherent, every subsequent `updatePositions` / `updateGreeks` call re-emits a full snapshot — so 100 instruments produce ~2N−1 emits per iteration. The causal path only emits when a causal key resolves (~N emits per iteration). The observed 1.95x speedup matches the 199:100 emit ratio almost exactly. Causal tracking wins here by _suppressing_ spurious re-emits, not by being cheaper per emit. **v0.4.0's batched emit erases this asymmetry entirely — both paths will emit exactly once per synchronous burst.**
+The mixed causal fraction numbers deserve a note: 100% instrumented is ~1.91x faster than 0% (pure wall-clock), which looks counterintuitive until you count emits. Once the wall-clock gate becomes coherent, every subsequent `updatePositions` / `updateGreeks` call re-emits a full snapshot — so 100 instruments produce ~2N−1 emits per iteration. The causal path only emits when a causal key resolves (~N emits per iteration). The observed 1.91x speedup matches the predicted 199:100 emit ratio (1.99x) within noise. Causal tracking wins here by _suppressing_ spurious re-emits, not by being cheaper per emit. **v0.5.0's batched emit erases this asymmetry entirely — both paths will emit exactly once per synchronous burst.**
 
 A note on tail latencies: `min`/`max`/`p999` from individual bench samples can swing 10–20x versus `mean` at sub-microsecond scales — those are single outliers (scheduler hiccups, GC pauses) rather than representative behaviour. Compare `mean` and `p99` for stable signal. See CHANGELOG for a full analysis of the trade-offs.
 
@@ -279,7 +308,7 @@ npm run bench:memory
 src/
   types.ts                    — Domain types, CausalMetadata, coherence extractors
   render-gate.ts              — Per-instrument causal gate
-  render-gate.test.ts         — 36 tests (D1–D16)
+  render-gate.test.ts         — 46 tests (D1–D23)
   backpressure-valve.ts       — Viewport-aware tick conflation
   orchestrator.worker.ts      — SharedWorker: single WS, pipeline wiring
   client-bridge.ts            — Tab-side interface to the SharedWorker
@@ -287,18 +316,18 @@ src/
     use-trading-stream.ts     — React hook for coherent snapshot consumption
 
 bench/
-  gate-latency.bench.ts       — False coherence rate, time-to-coherence p50/p99
-  gate-throughput.bench.ts    — Multi-instrument scaling, causal fraction
+  gate-latency.bench.ts       — False coherence rate, false incoherence (match vs monotonic), time-to-coherence p50/p99
+  gate-throughput.bench.ts    — Multi-instrument scaling, causal fraction, freshness overhead (match vs monotonic)
   valve-throughput.bench.ts   — BackpressureValve conflation ratio
 ```
 
-## Coming in v0.4.0 — Batched Emit
+## Coming in v0.5.0 — Batched Emit
 
-A single-purpose breaking release. The gate becomes microtask-debounced: all state writes that resolve within the same synchronous burst collapse into a single `CoherentSnapshot`, scheduled via `queueMicrotask`. A 500-instrument rebalance will emit once, not 500 times — collapsing snapshot construction from O(N²) to O(N) under the bench's synchronous load. This also erases the wall-clock over-emission asymmetry (~2N−1 emits vs ~N) that inflates v0.1.0's apparent throughput in the mixed causal fraction bench, and aligns the gate's emit cadence with the BackpressureValve upstream. `emit` becomes asynchronous; consumers that assert on snapshots immediately after a write must `await` a microtask flush. See CHANGELOG for implementation notes.
+A single-purpose breaking release. The gate becomes microtask-debounced: all state writes that resolve within the same synchronous burst collapse into a single `CoherentSnapshot`, scheduled via `queueMicrotask`. A 500-instrument rebalance will emit once, not 500 times — collapsing snapshot construction from O(N²) to O(N) under the bench's synchronous load. This also erases the wall-clock over-emission asymmetry (~2N−1 emits vs ~N) that inflates v0.1.0's apparent throughput in the mixed causal fraction bench, and aligns the gate's emit cadence with the BackpressureValve upstream. `emit` becomes asynchronous; consumers that assert on snapshots immediately after a write must `await` a microtask flush. Sequenced after the freshness fix — batching incorrect-by-construction emits would only obscure the underlying semantic gap. See CHANGELOG for implementation notes.
 
-## Coming in v0.5.0 — Synthetic Feed Generator + Interactive Demo
+## Coming in v0.6.0 — Synthetic Feed Generator + Interactive Demo
 
-Builds on v0.4.0's batched emit cadence.
+Builds on v0.5.0's batched emit cadence and v0.4.0's freshness floor.
 
 - **Synthetic feed generator** (`src/synthetic/`): self-contained `FeedSimulator` with GBM spot prices, Black-Scholes Greeks, Poisson fill arrivals, and log-normal latency — no runtime dependencies. Synchronous bench mode for deterministic load generation; exercises the same batched emit path the demo consumes.
 - **Interactive demo** (`demo/`): Vite + React blotter with per-row coherence indicators and a live side-by-side comparison of the wall-clock gate (v0.1.0) vs the causal gate (v0.3.0+) under a configurable volatility shock. Batched emit makes the visual comparison honest — each gate emits once per conceptual event, so wall-clock's degradation shows as _wrong_ data, not _more frequent_ data.

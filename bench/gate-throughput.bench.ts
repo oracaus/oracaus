@@ -30,7 +30,7 @@ import type {
   Timestamp,
   Vega,
 } from "../src/types";
-import { byCorrelationId } from "../src/types";
+import { byCorrelationId, byEventTimestamp } from "../src/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -76,27 +76,61 @@ function greeks(id: InstrumentId, causal: CausalMetadata = {}): GreeksUpdate {
   };
 }
 
-// All streams passThrough — every update triggers an immediate emit with zero
-// coherence logic. Measures the irreducible framework cost: state writes,
-// snapshot construction, and shallow copies. The floor below v0.1.0.
+// Framework-floor baseline: no coherenceKey → extractor returns null → every
+// update takes the wall-clock path and emits under the same-tick window.
+// `positions` is non-passThrough only to satisfy the v0.4.0 anchorStream
+// constraint; with a null extractor the freshness rule is inert.
 const PASSTHROUGH_CONFIG: RenderGateConfig = {
+  anchorStream: "positions",
   streams: {
     prices: { passThrough: true },
-    positions: { passThrough: true },
+    positions: { passThrough: false },
     greeks: { passThrough: true },
   },
   holdTimeout: 200,
   wallClockWindow: 50,
 };
 
-const V1_CONFIG: RenderGateConfig = { wallClockWindow: 50, holdTimeout: 200 };
+const V1_CONFIG: RenderGateConfig = {
+  anchorStream: "positions",
+  wallClockWindow: 50,
+  holdTimeout: 200,
+};
 
 const V3_CONFIG: RenderGateConfig = {
   coherenceKey: byCorrelationId,
+  anchorStream: "positions",
   streams: {
     prices: { passThrough: true },
     positions: { passThrough: false },
     greeks: { passThrough: false },
+  },
+  holdTimeout: 200,
+  wallClockWindow: 50,
+};
+
+// v0.4.0 freshness variants — use byEventTimestamp (orderable) so monotonic
+// is legal. Both configs are otherwise identical; the only runtime difference
+// is whether the coherence check calls compareKeys() or uses !== .
+const V4_MATCH_CONFIG: RenderGateConfig = {
+  coherenceKey: byEventTimestamp,
+  anchorStream: "positions",
+  streams: {
+    prices: { passThrough: true },
+    positions: { passThrough: false, freshness: "match" },
+    greeks: { passThrough: false, freshness: "match" },
+  },
+  holdTimeout: 200,
+  wallClockWindow: 50,
+};
+
+const V4_MONOTONIC_CONFIG: RenderGateConfig = {
+  coherenceKey: byEventTimestamp,
+  anchorStream: "positions",
+  streams: {
+    prices: { passThrough: true },
+    positions: { passThrough: false, freshness: "match" },
+    greeks: { passThrough: false, freshness: "monotonic" },
   },
   holdTimeout: 200,
   wallClockWindow: 50,
@@ -288,6 +322,52 @@ describe("Mixed causal metadata fraction — 100 instruments", () => {
       gate.destroy();
     },
   );
+});
+
+// ─── v0.4.0: Monotonic vs match freshness overhead ───────────────────────────
+// Confirms that the compareKeys() call on the monotonic path adds no measurable
+// overhead vs the plain string-equality check on the match path. Both configs
+// use byEventTimestamp (orderable) with identical arrival patterns — the only
+// runtime difference is the per-stream comparison inside isInstrumentCoherent.
+//
+// Expectation: hz for match and monotonic sit within measurement noise at every
+// scale. A persistent gap > ~5% at 100+ instruments would indicate the compare
+// function is hotter than the `!==` check and warrants investigation.
+
+describe("v0.4.0: freshness overhead — match vs monotonic", () => {
+  for (const N of [10, 100, 500]) {
+    const IDS = Array.from({ length: N }, (_, i) => `INST-${i}`);
+    const PRICE_MAP = new Map(IDS.map((id) => [id, tick(id, 100)]));
+    // Shared event timestamp for both — greeks.ts ≥ positions.ts, so under
+    // monotonic the inequality-branch runs on every instrument.
+    const TS = Date.now();
+
+    bench(`v0.4.0 match: ${N} instruments (byEventTimestamp)`, () => {
+      const gate = new RenderGate(() => {}, V4_MATCH_CONFIG);
+      gate.updatePrices(PRICE_MAP);
+      for (const id of IDS) {
+        gate.updatePositions(position(id, 100, { eventTimestamp: TS }));
+      }
+      for (const id of IDS) {
+        gate.updateGreeks(greeks(id, { eventTimestamp: TS }));
+      }
+      gate.destroy();
+    });
+
+    bench(`v0.4.0 monotonic: ${N} instruments (byEventTimestamp)`, () => {
+      const gate = new RenderGate(() => {}, V4_MONOTONIC_CONFIG);
+      gate.updatePrices(PRICE_MAP);
+      for (const id of IDS) {
+        gate.updatePositions(position(id, 100, { eventTimestamp: TS }));
+      }
+      for (const id of IDS) {
+        // Greeks one ms ahead — still coherent under monotonic, and exercises
+        // the strictly-greater branch of compareKeys().
+        gate.updateGreeks(greeks(id, { eventTimestamp: TS + 1 }));
+      }
+      gate.destroy();
+    });
+  }
 });
 
 // ─── Memory scaling ───────────────────────────────────────────────────────────

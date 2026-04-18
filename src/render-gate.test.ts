@@ -84,6 +84,7 @@ function collect(): [CoherentSnapshot[], (s: CoherentSnapshot) => void] {
 // v0.3.0: identity-based coherence via correlationId.
 const v3_CAUSAL_CONFIG: RenderGateConfig = {
   coherenceKey: byCorrelationId,
+  anchorStream: "positions",
   streams: {
     prices: { passThrough: true },
     positions: { passThrough: false },
@@ -94,7 +95,9 @@ const v3_CAUSAL_CONFIG: RenderGateConfig = {
 };
 
 // v0.1.0: no causal key → extractor returns null → wall-clock path only.
+// anchorStream is required in v0.4.0 even though the wall-clock path ignores it.
 const v1_CONFIG: RenderGateConfig = {
+  anchorStream: "positions",
   wallClockWindow: 50,
   holdTimeout: 200,
 };
@@ -314,6 +317,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byCorrelationId, // configured, but messages carry no correlationId
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true },
           positions: { passThrough: false },
@@ -337,6 +341,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byCorrelationId,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true },
           positions: { passThrough: false },
@@ -359,9 +364,10 @@ describe("RenderGate", () => {
       gate.destroy();
     });
 
-    test("zero-config gate is fully v0.1.0 compatible", () => {
+    test("minimal-config gate (anchorStream only) is fully v0.1.0 compatible", () => {
       const [snapshots, handler] = collect();
-      const gate = new RenderGate(handler); // no config
+      // v0.4.0 requires anchorStream; no coherenceKey still selects the wall-clock path.
+      const gate = new RenderGate(handler, { anchorStream: "positions" });
 
       gate.updatePrices(priceMap("AAPL", 150));
       gate.updatePositions(position("AAPL", 100));
@@ -485,6 +491,7 @@ describe("RenderGate", () => {
   describe("D7: Gap detection", () => {
     const SEQ_CONFIG: RenderGateConfig = {
       coherenceKey: byGlobalSequence,
+      anchorStream: "positions",
       streams: {
         prices: { passThrough: true, gapStrategy: "partial" },
         positions: { passThrough: false, gapStrategy: "wait" },
@@ -539,6 +546,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true, gapStrategy: "partial" },
           positions: { passThrough: false, gapStrategy: "wait" },
@@ -605,6 +613,7 @@ describe("RenderGate", () => {
       // greeks configured as 'partial': a missing reprice is superseded by the next one.
       const gate = new RenderGate(handler, {
         coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true, gapStrategy: "partial" },
           positions: { passThrough: false, gapStrategy: "wait" },
@@ -632,6 +641,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true, gapStrategy: "partial" },
           positions: { passThrough: false, gapStrategy: "wait" },
@@ -664,6 +674,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byEventTimestamp,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true },
           positions: { passThrough: false },
@@ -693,6 +704,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true, gapStrategy: "partial" },
           positions: { passThrough: false, gapStrategy: "wait" },
@@ -891,6 +903,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byCorrelationId,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true },
           positions: { passThrough: false },
@@ -925,6 +938,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byCorrelationId,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true },
           positions: { passThrough: false },
@@ -965,6 +979,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true, gapStrategy: "partial" },
           positions: { passThrough: false, gapStrategy: "wait" },
@@ -1010,6 +1025,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true, gapStrategy: "partial" },
           positions: { passThrough: false, gapStrategy: "wait" },
@@ -1032,6 +1048,7 @@ describe("RenderGate", () => {
       const [snapshots, handler] = collect();
       const gate = new RenderGate(handler, {
         coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
         streams: {
           prices: { passThrough: true, gapStrategy: "partial" },
           positions: { passThrough: false, gapStrategy: "wait" },
@@ -1227,6 +1244,299 @@ describe("RenderGate", () => {
       }
 
       gate.destroy();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // D17: Monotonic freshness under byEventTimestamp
+  //
+  // Greeks newer than position → coherent. The v0.3.0 equality rule would
+  // withhold; v0.4.0 accepts greeks.key >= position.key on ordered extractors.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe("D17: Monotonic freshness under byEventTimestamp", () => {
+    test("greeks newer than position resolves coherent", () => {
+      const [snapshots, handler] = collect();
+      const gate = new RenderGate(handler, {
+        coherenceKey: byEventTimestamp,
+        anchorStream: "positions",
+        streams: {
+          prices: { passThrough: true },
+          positions: { passThrough: false, freshness: "match" },
+          greeks: { passThrough: false, freshness: "monotonic" },
+        },
+      });
+
+      gate.updatePrices(priceMap("AAPL", 150, { eventTimestamp: 1000 }));
+      gate.updatePositions(position("AAPL", 100, { eventTimestamp: 1000 }));
+      // Greeks at a later timestamp — valid under monotonic, rejected under match
+      gate.updateGreeks(greeks("AAPL", { eventTimestamp: 2500 }));
+
+      const coherent = snapshots.filter((s) => !s.isPartial);
+      expect(coherent).toHaveLength(1);
+      expect(coherent[0].coherentInstruments.has("AAPL")).toBe(true);
+
+      gate.destroy();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // D18: Monotonic freshness under byGlobalSequence
+  //
+  // Greeks sequence > position sequence → coherent. Gap detection and
+  // freshness are orthogonal: a monotonic key still needs to pass.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe("D18: Monotonic freshness under byGlobalSequence", () => {
+    test("greeks at seq > position seq resolves coherent", () => {
+      const [snapshots, handler] = collect();
+      const gate = new RenderGate(handler, {
+        coherenceKey: byGlobalSequence,
+        anchorStream: "positions",
+        streams: {
+          prices: { passThrough: true, gapStrategy: "partial" },
+          positions: {
+            passThrough: false,
+            gapStrategy: "wait",
+            freshness: "match",
+          },
+          greeks: {
+            passThrough: false,
+            gapStrategy: "wait",
+            freshness: "monotonic",
+          },
+        },
+      });
+
+      gate.updatePrices(priceMap("AAPL", 150, { globalSequence: 100 }));
+      gate.updatePositions(position("AAPL", 100, { globalSequence: 100 }));
+      gate.updateGreeks(greeks("AAPL", { globalSequence: 101 }));
+
+      const coherent = snapshots.filter((s) => !s.isPartial);
+      expect(coherent).toHaveLength(1);
+      expect(coherent[0].coherentInstruments.has("AAPL")).toBe(true);
+
+      gate.destroy();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // D19: Monotonic — negative case
+  //
+  // Greeks older than position → still withheld. Proves monotonic hasn't
+  // relaxed into "accept anything"; the lower-bound constraint holds.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe("D19: Monotonic — greeks older than position withheld", () => {
+    test("greeks at older timestamp than position does not become coherent", () => {
+      const [snapshots, handler] = collect();
+      const gate = new RenderGate(handler, {
+        coherenceKey: byEventTimestamp,
+        anchorStream: "positions",
+        streams: {
+          prices: { passThrough: true },
+          positions: { passThrough: false, freshness: "match" },
+          greeks: { passThrough: false, freshness: "monotonic" },
+        },
+      });
+
+      gate.updatePrices(priceMap("AAPL", 150, { eventTimestamp: 1000 }));
+      vi.advanceTimersByTime(60); // push wall-clock spread past the 50ms fallback window
+      gate.updateGreeks(greeks("AAPL", { eventTimestamp: 500 })); // pre-position
+      vi.advanceTimersByTime(60);
+      gate.updatePositions(position("AAPL", 100, { eventTimestamp: 1000 }));
+
+      // No coherent emit yet — greeks is behind the anchor.
+      expect(snapshots.filter((s) => !s.isPartial)).toHaveLength(0);
+
+      // Timer fires → partial, AAPL omitted.
+      vi.advanceTimersByTime(250);
+      const last = snapshots[snapshots.length - 1];
+      expect(last.isPartial).toBe(true);
+      expect(last.coherentInstruments.has("AAPL")).toBe(false);
+
+      gate.destroy();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // D20: Greeks-before-position arrival order under monotonic
+  //
+  // Greeks arrives first with a newer key; position catches up with a key
+  // ≤ buffered greeks. Coherence resolves on position arrival.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe("D20: Monotonic — greeks-before-position arrival order", () => {
+    test("greeks arrives first, position catches up with older key, coherent", () => {
+      const [snapshots, handler] = collect();
+      const gate = new RenderGate(handler, {
+        coherenceKey: byEventTimestamp,
+        anchorStream: "positions",
+        streams: {
+          prices: { passThrough: true },
+          positions: { passThrough: false, freshness: "match" },
+          greeks: { passThrough: false, freshness: "monotonic" },
+        },
+      });
+
+      gate.updatePrices(priceMap("AAPL", 150, { eventTimestamp: 500 }));
+      gate.updateGreeks(greeks("AAPL", { eventTimestamp: 2000 }));
+      // No coherent emit yet — anchor has no key.
+      expect(snapshots.filter((s) => !s.isPartial)).toHaveLength(0);
+
+      gate.updatePositions(position("AAPL", 100, { eventTimestamp: 1000 }));
+
+      const coherent = snapshots.filter((s) => !s.isPartial);
+      expect(coherent).toHaveLength(1);
+      expect(coherent[0].coherentInstruments.has("AAPL")).toBe(true);
+
+      gate.destroy();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // D21: Hold timer behaviour under monotonic
+  //
+  // Anchor advances while dependent lags → exactly one timer pending at a
+  // time. Dependent catches up → timer cancelled, no partial emit.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe("D21: Monotonic — hold timer cancellation on catch-up", () => {
+    test("anchor advances, dependent catches up, timer cancelled", () => {
+      const [snapshots, handler] = collect();
+      const gate = new RenderGate(handler, {
+        coherenceKey: byEventTimestamp,
+        anchorStream: "positions",
+        streams: {
+          prices: { passThrough: true },
+          positions: { passThrough: false, freshness: "match" },
+          greeks: { passThrough: false, freshness: "monotonic" },
+        },
+      });
+
+      gate.updatePrices(priceMap("AAPL", 150, { eventTimestamp: 1000 }));
+      gate.updatePositions(position("AAPL", 100, { eventTimestamp: 1000 }));
+      gate.updateGreeks(greeks("AAPL", { eventTimestamp: 1000 }));
+      const initialCoherentCount = snapshots.filter((s) => !s.isPartial).length;
+      expect(initialCoherentCount).toBe(1);
+
+      // Anchor advances → dependent stale under monotonic; gate arms a timer
+      // but does not emit (supersession is silent in v0.3.0+).
+      gate.updatePositions(position("AAPL", 110, { eventTimestamp: 2000 }));
+      expect(snapshots.length).toBe(initialCoherentCount); // no new emit
+
+      // Dependent catches up before timeout → cancel timer, emit coherent.
+      vi.advanceTimersByTime(50);
+      gate.updateGreeks(greeks("AAPL", { eventTimestamp: 2500 }));
+
+      const last = snapshots[snapshots.length - 1];
+      expect(last.isPartial).toBe(false);
+      expect(last.coherentInstruments.has("AAPL")).toBe(true);
+
+      // Advance past original holdTimeout — no partial emit should fire.
+      const emitCountBefore = snapshots.length;
+      vi.advanceTimersByTime(300);
+      expect(snapshots.length).toBe(emitCountBefore);
+
+      gate.destroy();
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // D22: Runtime rejection — freshness: "monotonic" with byCorrelationId
+  //
+  // Type-level narrowing of freshness per extractor is a planned refinement;
+  // the gate refuses the invalid combination at construction time so the
+  // invariant holds regardless of how the config is assembled.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe("D22: Validation — monotonic with byCorrelationId", () => {
+    test("construction throws when monotonic freshness has no ordering", () => {
+      expect(
+        () =>
+          new RenderGate(() => {}, {
+            coherenceKey: byCorrelationId,
+            anchorStream: "positions",
+            streams: {
+              prices: { passThrough: true },
+              positions: { passThrough: false, freshness: "match" },
+              greeks: { passThrough: false, freshness: "monotonic" },
+            },
+          }),
+      ).toThrow(/requires an ordered coherence key extractor/);
+    });
+
+    test("construction throws when anchorStream is omitted entirely", () => {
+      expect(
+        () =>
+          // @ts-expect-error — anchorStream is required in v0.4.0
+          new RenderGate(() => {}, {
+            coherenceKey: byEventTimestamp,
+            streams: {
+              prices: { passThrough: true },
+              positions: { passThrough: false, freshness: "match" },
+              greeks: { passThrough: false, freshness: "monotonic" },
+            },
+          }),
+      ).toThrow(/not a declared stream/);
+    });
+
+    test("construction throws when monotonic freshness is set on a passThrough stream", () => {
+      // freshness has no effect on passThrough streams (valid-until-superseded);
+      // the combination is a config bug, so the gate rejects it at construction.
+      expect(
+        () =>
+          new RenderGate(() => {}, {
+            coherenceKey: byEventTimestamp,
+            anchorStream: "positions",
+            streams: {
+              prices: { passThrough: true, freshness: "monotonic" },
+              positions: { passThrough: false, freshness: "match" },
+              greeks: { passThrough: false, freshness: "match" },
+            },
+          }),
+      ).toThrow(/passThrough/);
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // D23: Runtime rejection — anchorStream pointing at passThrough or unknown
+  //
+  // The anchor must be a declared non-passThrough stream. Both error paths
+  // are validated at construction.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  describe("D23: Validation — anchorStream constraints", () => {
+    test("construction throws when anchorStream is passThrough", () => {
+      expect(
+        () =>
+          new RenderGate(() => {}, {
+            coherenceKey: byEventTimestamp,
+            anchorStream: "prices",
+            streams: {
+              prices: { passThrough: true },
+              positions: { passThrough: false, freshness: "match" },
+              greeks: { passThrough: false, freshness: "monotonic" },
+            },
+          }),
+      ).toThrow(/passThrough/);
+    });
+
+    test("construction throws when anchorStream names an unknown stream", () => {
+      expect(
+        () =>
+          new RenderGate(() => {}, {
+            coherenceKey: byEventTimestamp,
+            // @ts-expect-error — StreamId narrowing catches this at compile time;
+            // the runtime check is a safety net for untyped call sites.
+            anchorStream: "nonexistent",
+            streams: {
+              prices: { passThrough: true },
+              positions: { passThrough: false, freshness: "match" },
+              greeks: { passThrough: false, freshness: "monotonic" },
+            },
+          }),
+      ).toThrow(/not a declared stream/);
     });
   });
 });

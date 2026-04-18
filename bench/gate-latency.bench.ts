@@ -36,7 +36,7 @@ import type {
   Timestamp,
   Vega,
 } from "../src/types";
-import { byCorrelationId } from "../src/types";
+import { byCorrelationId, byEventTimestamp } from "../src/types";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -86,14 +86,45 @@ function priceMap(id: InstrumentId, mid: number): Map<InstrumentId, PriceTick> {
   return new Map([[id, tick(id, mid)]]);
 }
 
-const V1_CONFIG: RenderGateConfig = { wallClockWindow: 50, holdTimeout: 200 };
+const V1_CONFIG: RenderGateConfig = {
+  anchorStream: "positions",
+  wallClockWindow: 50,
+  holdTimeout: 200,
+};
 
 const V3_CONFIG: RenderGateConfig = {
   coherenceKey: byCorrelationId,
+  anchorStream: "positions",
   streams: {
     prices: { passThrough: true },
     positions: { passThrough: false },
     greeks: { passThrough: false },
+  },
+  holdTimeout: 200,
+  wallClockWindow: 50,
+};
+
+// v0.4.0 fast-reprice scenario: greeks routinely run ahead of positions.
+// Match withholds coherence on every reprice; monotonic accepts greeks ≥ anchor.
+const V4_MATCH_TS_CONFIG: RenderGateConfig = {
+  coherenceKey: byEventTimestamp,
+  anchorStream: "positions",
+  streams: {
+    prices: { passThrough: true },
+    positions: { passThrough: false, freshness: "match" },
+    greeks: { passThrough: false, freshness: "match" },
+  },
+  holdTimeout: 200,
+  wallClockWindow: 50,
+};
+
+const V4_MONOTONIC_TS_CONFIG: RenderGateConfig = {
+  coherenceKey: byEventTimestamp,
+  anchorStream: "positions",
+  streams: {
+    prices: { passThrough: true },
+    positions: { passThrough: false, freshness: "match" },
+    greeks: { passThrough: false, freshness: "monotonic" },
   },
   holdTimeout: 200,
   wallClockWindow: 50,
@@ -229,6 +260,108 @@ describe("False Incoherence Rate — correlated fill, Greeks delayed 60ms", () =
       gate.updateGreeks(greeks("AAPL", { correlationId: "FILL-1" }));
 
       if (snapshots.some((s) => !s.isPartial)) v3Emitted++;
+
+      gate.destroy();
+    },
+  );
+});
+
+// ─── v0.4.0: False Incoherence Rate under fast reprice ───────────────────────
+// Scenario: a fill lands, then Greeks reprice repeatedly as spot ticks. Each
+// reprice carries a newer eventTimestamp than the position. Under match, every
+// reprice either withholds coherence (old position vs new greeks.ts) or — if
+// greeks arrive before the next position with a strictly greater ts —
+// withholds forever. Under monotonic, greeks ≥ position passes cleanly.
+//
+// Definition:
+//   excludedRate = fraction of emits where AAPL ∉ coherentInstruments
+// Expectation:
+//   match    : high exclusion (every reprice bumps greeks past position)
+//   monotonic: ~0% exclusion
+//
+// This is the v0.4.0 analogue of the v0.3.0 false-coherence comparison above —
+// it quantifies the correctness payoff of the freshness upgrade.
+
+describe("v0.4.0: False Incoherence under fast reprice — match vs monotonic", () => {
+  const REPRICES_PER_RUN = 5;
+  let matchTotal = 0,
+    matchExcluded = 0;
+  let monoTotal = 0,
+    monoExcluded = 0;
+
+  afterAll(() => {
+    const matchRate =
+      matchTotal > 0 ? ((matchExcluded / matchTotal) * 100).toFixed(1) : "N/A";
+    const monoRate =
+      monoTotal > 0 ? ((monoExcluded / monoTotal) * 100).toFixed(1) : "N/A";
+    console.log(
+      "\n── v0.4.0 False Incoherence under fast reprice ────────────",
+    );
+    console.log(
+      `  match     : ${matchRate}% emits with AAPL excluded (${matchExcluded}/${matchTotal})`,
+    );
+    console.log(
+      `  monotonic : ${monoRate}% emits with AAPL excluded (${monoExcluded}/${monoTotal})`,
+    );
+    console.log(
+      "───────────────────────────────────────────────────────────\n",
+    );
+
+    // Regression guards: monotonic must accept fast reprices; match must not.
+    if (monoTotal > 0 && monoExcluded > 0) {
+      throw new Error(
+        `v0.4.0 monotonic regressed: ${monoExcluded}/${monoTotal} emits excluded (expected 0)`,
+      );
+    }
+    if (matchTotal > 0 && matchExcluded === 0) {
+      throw new Error(
+        "v0.4.0 match did not exhibit expected false incoherence — scenario may no longer exercise the branch.",
+      );
+    }
+  });
+
+  bench(
+    "match: fill + 5 reprices (greeks.ts > position.ts) [EXPECT high exclusion]",
+    () => {
+      matchTotal++;
+      const snapshots: CoherentSnapshot[] = [];
+      const gate = new RenderGate((s) => snapshots.push(s), V4_MATCH_TS_CONFIG);
+      const baseTs = 1_000_000;
+
+      gate.updatePrices(priceMap("AAPL", 150));
+      gate.updatePositions(position("AAPL", 100, { eventTimestamp: baseTs }));
+      gate.updateGreeks(greeks("AAPL", { eventTimestamp: baseTs }));
+      for (let i = 1; i <= REPRICES_PER_RUN; i++) {
+        gate.updateGreeks(greeks("AAPL", { eventTimestamp: baseTs + i }));
+      }
+
+      const last = snapshots[snapshots.length - 1];
+      if (last && !last.coherentInstruments.has("AAPL")) matchExcluded++;
+
+      gate.destroy();
+    },
+  );
+
+  bench(
+    "monotonic: fill + 5 reprices (greeks.ts > position.ts) [EXPECT 0 exclusion]",
+    () => {
+      monoTotal++;
+      const snapshots: CoherentSnapshot[] = [];
+      const gate = new RenderGate(
+        (s) => snapshots.push(s),
+        V4_MONOTONIC_TS_CONFIG,
+      );
+      const baseTs = 1_000_000;
+
+      gate.updatePrices(priceMap("AAPL", 150));
+      gate.updatePositions(position("AAPL", 100, { eventTimestamp: baseTs }));
+      gate.updateGreeks(greeks("AAPL", { eventTimestamp: baseTs }));
+      for (let i = 1; i <= REPRICES_PER_RUN; i++) {
+        gate.updateGreeks(greeks("AAPL", { eventTimestamp: baseTs + i }));
+      }
+
+      const last = snapshots[snapshots.length - 1];
+      if (last && !last.coherentInstruments.has("AAPL")) monoExcluded++;
 
       gate.destroy();
     },

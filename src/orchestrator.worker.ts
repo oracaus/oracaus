@@ -61,6 +61,7 @@ const renderGate = new RenderGate(
     // When messages lack the configured field, the gate automatically falls
     // back to wall-clock coherence (v0.1.0 behaviour).
     coherenceKey: byCorrelationId,
+    anchorStream: "positions",
 
     // ── Stream freshness semantics ──────────────────────────────────────
     streams: {

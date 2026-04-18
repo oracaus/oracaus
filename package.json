@@ -1,6 +1,6 @@
 {
   "name": "trading-ui-pipeline",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Causally consistent pipeline for real-time trading UIs",
   "type": "module",
   "exports": {
@@ -22,8 +22,8 @@
     "src"
   ],
   "scripts": {
-    "build": "tsc",
-    "build:watch": "tsc --watch",
+    "build": "tsc -p tsconfig.build.json",
+    "build:watch": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
     "bench": "vitest bench",
     "bench:memory": "node --expose-gc ./node_modules/.bin/vitest bench",

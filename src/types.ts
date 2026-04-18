@@ -42,6 +42,14 @@ export interface CausalMetadata {
  */
 export type CoherenceKeyExtractor = ((msg: CausalMetadata) => string | null) & {
   readonly __sequenced?: never;
+  /**
+   * Strategy-aware ordering. Present on byEventTimestamp and byGlobalSequence
+   * (keys are orderable), absent on byCorrelationId (opaque strings).
+   *
+   * Returns -1/0/1 for a < b / a === b / a > b. Used by `freshness: "monotonic"` to
+   * decide whether a dependent stream's key is at least as fresh as the anchor's.
+   */
+  readonly compare?: (a: string, b: string) => -1 | 0 | 1;
 };
 
 /**
@@ -52,6 +60,7 @@ export type CoherenceKeyExtractor = ((msg: CausalMetadata) => string | null) & {
 export interface SequencedCoherenceKeyExtractor {
   (msg: CausalMetadata): string | null;
   readonly __sequenced: true;
+  readonly compare: (a: string, b: string) => -1 | 0 | 1;
 }
 
 /** For event-driven fan-out feeds where the backend stamps a shared correlationId. */
@@ -64,9 +73,20 @@ export const byCorrelationId: CoherenceKeyExtractor = (msg) =>
  * Collision risk: independent events at the same millisecond share a key,
  * producing false coherence — the same failure as v0.1.0 wall-clock.
  * Avoid at HFT event rates (multiple events per ms).
+ *
+ * Carries `compare` so `freshness: "monotonic"` can order keys numerically.
  */
-export const byEventTimestamp: CoherenceKeyExtractor = (msg) =>
-  msg.eventTimestamp != null ? String(msg.eventTimestamp) : null;
+export const byEventTimestamp: CoherenceKeyExtractor = Object.assign(
+  (msg: CausalMetadata): string | null =>
+    msg.eventTimestamp != null ? String(msg.eventTimestamp) : null,
+  {
+    compare: (a: string, b: string): -1 | 0 | 1 => {
+      const na = Number(a);
+      const nb = Number(b);
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    },
+  },
+);
 
 /**
  * For sequenced feeds (Solace, AMPS).
@@ -82,7 +102,14 @@ export const byEventTimestamp: CoherenceKeyExtractor = (msg) =>
 export const byGlobalSequence: SequencedCoherenceKeyExtractor = Object.assign(
   (msg: CausalMetadata): string | null =>
     msg.globalSequence != null ? String(msg.globalSequence) : null,
-  { __sequenced: true as const },
+  {
+    __sequenced: true as const,
+    compare: (a: string, b: string): -1 | 0 | 1 => {
+      const na = Number(a);
+      const nb = Number(b);
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    },
+  },
 );
 
 // ─── Stream configuration ────────────────────────────────────────────────────
@@ -98,6 +125,23 @@ export interface StreamConfig {
    *   matching causal key. Use when stale data is still correct: prices.
    */
   passThrough: boolean;
+
+  /**
+   * Coherence rule for this stream relative to the anchor stream.
+   *
+   * "match"     — the stream's causal key must equal the anchor's current key.
+   *               Default. Required when the extractor is byCorrelationId
+   *               (correlation IDs are opaque strings, not orderable).
+   * "monotonic" — the stream's causal key must be ≥ the anchor's current key.
+   *               Use when the stream is a pure function of market state and
+   *               may legitimately run ahead of the anchor (e.g. Greeks on a
+   *               fast reprice loop vs. a slower fill cadence). Requires the
+   *               extractor to expose a `compare` method (byEventTimestamp,
+   *               byGlobalSequence).
+   *
+   * Ignored for passThrough streams and on the wall-clock fallback path.
+   */
+  freshness?: "match" | "monotonic";
 
   /**
    * Policy for missing sequence numbers. Only active with byGlobalSequence.
@@ -204,9 +248,12 @@ export interface CoherentSnapshot {
   renderedAt: number;
 
   /**
-   * Set of instruments for which all required streams carried the same
-   * causal key at emit time. An instrument is coherent when its position
-   * and greeks share the same correlationId (or equivalent causal key).
+   * Set of instruments for which all required streams satisfied their
+   * freshness contract against the anchor stream at emit time. Under the
+   * default `freshness: "match"`, every non-passThrough stream carries the
+   * same causal key as the anchor (e.g. correlationId). Under
+   * `freshness: "monotonic"`, a dependent stream may carry a key ≥ the
+   * anchor's — see StreamConfig.freshness.
    *
    * Instruments absent from this set either:
    *   - have not yet received data on all required streams (normal at startup), or

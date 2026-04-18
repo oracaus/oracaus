@@ -38,6 +38,17 @@ interface RenderGateConfigBase {
    * @default 50
    */
   wallClockWindow?: number;
+
+  /**
+   * The non-passThrough stream that defines each instrument's reference key.
+   * Other non-passThrough streams are evaluated against the anchor per their
+   * `freshness` setting: "match" requires equal keys, "monotonic" requires
+   * key ≥ anchor's key.
+   *
+   * Required in every config (v0.4.0 breaking change). The wall-clock
+   * fallback path ignores it.
+   */
+  anchorStream: StreamId;
 }
 
 /**
@@ -94,7 +105,8 @@ export type RenderGateConfig =
  *
  * Wall-clock fallback remains stream-level (not per-instrument). It is the
  * explicitly degraded mode for uninstrumented feeds; per-instrument wall-clock
- * tracking is a v0.4.0 concern.
+ * tracking remains a future concern (not addressed in v0.4.0 — freshness
+ * semantics only affect the causal path).
  */
 export class RenderGate {
   private state: StreamState = {
@@ -154,11 +166,19 @@ export class RenderGate {
   private readonly extractCausalKey:
     | CoherenceKeyExtractor
     | SequencedCoherenceKeyExtractor;
+  /** The non-passThrough stream that defines each instrument's reference key. */
+  private readonly anchorStream: StreamId;
+  /** True iff any non-passThrough stream declares `freshness: "monotonic"`. */
+  private readonly hasMonotonicFreshness: boolean;
+  /** Strategy-aware key comparator, present when the extractor supports ordering. */
+  private readonly compareKeys:
+    | ((a: string, b: string) => -1 | 0 | 1)
+    | undefined;
   private onGapCallback?: (event: GapEvent) => void;
 
   constructor(
     private readonly onSnapshot: (snapshot: CoherentSnapshot) => void,
-    config: RenderGateConfig = {},
+    config: RenderGateConfig,
   ) {
     // ── Config variant note ──────────────────────────────────────────────────
     // config is StandardRenderGateConfig | SequencedRenderGateConfig. Both
@@ -177,20 +197,72 @@ export class RenderGate {
     this.streamConfigs = {
       prices: {
         passThrough: true,
+        freshness: "match",
         gapStrategy: "partial",
         ...config.streams?.prices,
       },
       positions: {
         passThrough: false,
+        freshness: "match",
         gapStrategy: "wait",
         ...config.streams?.positions,
       },
       greeks: {
         passThrough: false,
+        freshness: "match",
         gapStrategy: "wait",
         ...config.streams?.greeks,
       },
     };
+
+    this.compareKeys = (
+      config.coherenceKey as CoherenceKeyExtractor | undefined
+    )?.compare;
+
+    this.hasMonotonicFreshness = REQUIRED_STREAMS.some(
+      (s) => this.streamConfigs[s].freshness === "monotonic",
+    );
+
+    // ── Runtime validation ───────────────────────────────────────────────────
+    // Type-level narrowing of `freshness` per extractor and of `anchorStream`
+    // (passThrough / unknown) is scheduled for v0.5.0 — see CHANGELOG v0.5.0
+    // impl note 10. When that lands, the three `throw` sites below should all
+    // become compile errors and this entire validation block can be deleted.
+    // The v0.4.0 TypeScript surface stays permissive (match | monotonic on any
+    // extractor, any declared StreamId as anchor) but the gate refuses to run
+    // an invalid combination.
+    // ─────────────────────────────────────────────────────────────────────────
+    if (this.hasMonotonicFreshness) {
+      if (this.compareKeys === undefined) {
+        throw new Error(
+          'freshness: "monotonic" requires an ordered coherence key extractor ' +
+            "(byEventTimestamp or byGlobalSequence). byCorrelationId has no ordering.",
+        );
+      }
+      for (const s of REQUIRED_STREAMS) {
+        if (
+          this.streamConfigs[s].freshness === "monotonic" &&
+          this.streamConfigs[s].passThrough
+        ) {
+          throw new Error(
+            `Stream "${s}" is passThrough — freshness has no effect on passThrough streams.`,
+          );
+        }
+      }
+    }
+
+    if (!REQUIRED_STREAMS.includes(config.anchorStream)) {
+      throw new Error(
+        `anchorStream "${config.anchorStream}" is not a declared stream.`,
+      );
+    }
+    if (this.streamConfigs[config.anchorStream].passThrough) {
+      throw new Error(
+        `anchorStream "${config.anchorStream}" is passThrough — ` +
+          "the anchor must be a non-passThrough stream.",
+      );
+    }
+    this.anchorStream = config.anchorStream;
   }
 
   /** Register a callback for sequence gap events (byGlobalSequence feeds only). */
@@ -354,9 +426,17 @@ export class RenderGate {
    *   - The hold timer fires (see armHoldTimer).
    */
   private tryEmitCausal(instrumentId: InstrumentId, causalKey: string): void {
+    // Supersession is driven by the anchor's current key, not the triggering
+    // stream's — a monotonic dependent advancing past the anchor is not a
+    // supersession event. When the anchor hasn't delivered yet, fall back to
+    // the triggering key so the hold timer still arms (and fires partial) if
+    // the anchor never arrives.
+    const pendingKey =
+      this.state.lastCausalId[this.anchorStream][instrumentId] ?? causalKey;
+
     const existingKey = this.pendingCausalKeys.get(instrumentId);
 
-    if (existingKey !== undefined && existingKey !== causalKey) {
+    if (existingKey !== undefined && existingKey !== pendingKey) {
       // Supersession for this instrument only. Clear the old timer and adopt
       // the new key. No partial emit — the new key may resolve quickly, and
       // coherentInstruments on the next emit implicitly signals in-flight state.
@@ -364,9 +444,9 @@ export class RenderGate {
       this._coherentInstruments.delete(instrumentId);
     }
 
-    this.pendingCausalKeys.set(instrumentId, causalKey);
+    this.pendingCausalKeys.set(instrumentId, pendingKey);
 
-    if (this.isInstrumentCoherent(instrumentId, causalKey)) {
+    if (this.isInstrumentCoherent(instrumentId)) {
       this.clearHoldTimer(instrumentId);
       this.pendingCausalKeys.delete(instrumentId);
       // Consume the gap flag: this coherent delivery is the first clean snapshot
@@ -379,6 +459,11 @@ export class RenderGate {
       this._coherentInstruments.add(instrumentId);
       this.emit();
     } else {
+      // Membership must track the post-update coherence state. Without this,
+      // a previously-coherent instrument whose anchor just advanced past a
+      // monotonic dependent (or whose key changed under match without a
+      // pre-existing pending) would linger in the set until the next supersession.
+      this._coherentInstruments.delete(instrumentId);
       this.armHoldTimer(instrumentId);
     }
   }
@@ -416,29 +501,42 @@ export class RenderGate {
   // ── Coherence checks ──────────────────────────────────────────────────────
 
   /**
-   * True when every required stream is ready for the given instrument and key.
+   * True when every required stream is ready for the given instrument.
    *
-   * passThrough streams: any historical update for this instrument suffices
-   *   (valid-until-superseded). Checked per-instrument: AAPL can be coherent
-   *   even if GOOG has no price yet.
-   * non-passThrough streams: lastCausalId[stream][instrumentId] must match
-   *   exactly (invalid-if-stale).
+   * passThrough streams: any historical update suffices (valid-until-superseded).
+   * non-passThrough streams: governed by `freshness` relative to the anchor:
+   *   - "match" (default): stream's causal key must equal the anchor's key.
+   *   - "monotonic": stream's key must be ≥ the anchor's key per the extractor's
+   *     `compare` function. Requires an ordered extractor (validated at construction).
    */
-  private isInstrumentCoherent(
-    instrumentId: InstrumentId,
-    causalKey: string,
-  ): boolean {
+  private isInstrumentCoherent(instrumentId: InstrumentId): boolean {
+    const anchorKey = this.state.lastCausalId[this.anchorStream][instrumentId];
+    if (anchorKey === undefined) return false;
+
     for (const streamId of REQUIRED_STREAMS) {
       const config = this.streamConfigs[streamId];
 
       if (config.passThrough) {
-        // Any historical data for this instrument suffices.
         if (this.state[streamId][instrumentId] === undefined) return false;
-      } else {
-        // Must carry the exact causal key for this specific instrument.
-        if (this.state.lastCausalId[streamId][instrumentId] !== causalKey) {
+        continue;
+      }
+
+      if (streamId === this.anchorStream) continue; // anchor is its own reference
+
+      const streamKey = this.state.lastCausalId[streamId][instrumentId];
+      if (streamKey === undefined) return false;
+
+      if (config.freshness === "monotonic") {
+        // compareKeys is guaranteed non-undefined for monotonic streams —
+        // the constructor rejects monotonic without an ordered extractor.
+        if (
+          this.compareKeys === undefined ||
+          this.compareKeys(streamKey, anchorKey) < 0
+        ) {
           return false;
         }
+      } else if (streamKey !== anchorKey) {
+        return false;
       }
     }
     return true;

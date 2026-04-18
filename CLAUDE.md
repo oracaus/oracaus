@@ -52,6 +52,6 @@ All domain numerics are **branded primitives** (`Price`, `Quantity`, `Delta`, et
 
 ## Test suite
 
-36 tests in `src/render-gate.test.ts`, grouped D1–D16. Each suite targets a specific failure mode or invariant (false coherence, false incoherence, supersession, gap detection, etc.). When adding tests, follow the existing suite naming and grouping.
+46 tests in `src/render-gate.test.ts`, grouped D1–D23. D1–D16 cover v0.3.0 per-instrument causal coherence; D17–D23 cover v0.4.0 monotonic freshness and config validation. Each suite targets a specific failure mode or invariant. When adding tests, follow the existing suite naming and grouping.
 
 Benchmarks live in `bench/` (not under `src/`) and are excluded from the test run.

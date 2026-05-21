@@ -1,0 +1,99 @@
+{
+  "$schema": "demo-internal SVI calibration fixture",
+  "description": "Synthetic Gatheral-style SVI example. Clean (noiseless) IV data generated from raw-SVI parameters representative of equity-index calibration. Used to verify round-trip parameter recovery in the SVI fitter and to cross-validate against scipy.optimize.least_squares.",
+  "citation": "Parameter set patterned after Gatheral & Jacquier 'Arbitrage-free SVI volatility surfaces' (Quantitative Finance 14:1, 2014); equity-index magnitudes. Synthetic — not transcribed from the paper.",
+  "truth": {
+    "a": 0.04,
+    "b": 0.1,
+    "rho": -0.5,
+    "m": 0,
+    "sigma": 0.2
+  },
+  "timeToExpiry": 1,
+  "quotes": [
+    {
+      "logMoneyness": -1,
+      "impliedVol": 0.438155668994315
+    },
+    {
+      "logMoneyness": -0.9,
+      "impliedVol": 0.42094589269041327
+    },
+    {
+      "logMoneyness": -0.8,
+      "impliedVol": 0.4030658910306766
+    },
+    {
+      "logMoneyness": -0.7,
+      "impliedVol": 0.38444908491607205
+    },
+    {
+      "logMoneyness": -0.6,
+      "impliedVol": 0.3650281539872885
+    },
+    {
+      "logMoneyness": -0.5,
+      "impliedVol": 0.3447486737774999
+    },
+    {
+      "logMoneyness": -0.3999999999999999,
+      "impliedVol": 0.32360679774997897
+    },
+    {
+      "logMoneyness": -0.29999999999999993,
+      "impliedVol": 0.30175406004665434
+    },
+    {
+      "logMoneyness": -0.19999999999999996,
+      "impliedVol": 0.2797932651931813
+    },
+    {
+      "logMoneyness": -0.09999999999999998,
+      "impliedVol": 0.2595393607432173
+    },
+    {
+      "logMoneyness": 0,
+      "impliedVol": 0.24494897427831783
+    },
+    {
+      "logMoneyness": 0.10000000000000009,
+      "impliedVol": 0.23950089723213544
+    },
+    {
+      "logMoneyness": 0.20000000000000018,
+      "impliedVol": 0.24142135623730954
+    },
+    {
+      "logMoneyness": 0.30000000000000004,
+      "impliedVol": 0.24709413743478395
+    },
+    {
+      "logMoneyness": 0.40000000000000013,
+      "impliedVol": 0.2544039299028138
+    },
+    {
+      "logMoneyness": 0.5,
+      "impliedVol": 0.2623959757148441
+    },
+    {
+      "logMoneyness": 0.6000000000000001,
+      "impliedVol": 0.27063915681838724
+    },
+    {
+      "logMoneyness": 0.7000000000000002,
+      "impliedVol": 0.2789284834734617
+    },
+    {
+      "logMoneyness": 0.8,
+      "impliedVol": 0.28716217110259007
+    },
+    {
+      "logMoneyness": 0.9000000000000001,
+      "impliedVol": 0.2952887477926121
+    },
+    {
+      "logMoneyness": 1,
+      "impliedVol": 0.3032826903597627
+    }
+  ]
+}

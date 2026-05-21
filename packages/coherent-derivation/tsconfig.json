@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    // tsc emits per-file .js + .d.ts here; the esbuild bundle (built by
+    // `scripts/build.mjs`) lands at `dist/index.js`. The two never collide
+    // because they target separate directories.
+    "outDir": "dist/types",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "composite": true,
+    // Keep the incremental cache outside `dist/` so it doesn't ship in
+    // `npm pack` and isn't wiped by `build:clean`.
+    "tsBuildInfoFile": "tsconfig.tsbuildinfo"
+  },
+  "include": ["src"]
+}

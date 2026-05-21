@@ -1,0 +1,31 @@
+{
+  "name": "@oracaus/demo",
+  "version": "0.5.0-pre",
+  "description": "Demo app for compute-quantum render alignment around SVI vol-surface fitting under streaming option chain inputs. Phase 0 placeholder; Phase 3 wires Vite + React + the SVI fitter.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json --noEmit"
+  },
+  "dependencies": {
+    "@oracaus/coherent-derivation": "*"
+  },
+  "license": "MIT",
+  "author": "Przemyslaw Kalka",
+  "devDependencies": {
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@tailwindcss/vite": "^4.2.4",
+    "@types/d3-scale": "^4.0.9",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "d3-scale": "^4.0.2",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "tailwindcss": "^4.2.4",
+    "vite": "^8.0.10"
+  }
+}

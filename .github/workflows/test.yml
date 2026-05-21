@@ -1,0 +1,51 @@
+# Test gate for the library + the demo.
+#
+# Runs on every push to master and every PR against master. Separate from
+# deploy-demo.yml so test failures don't block a Pages deploy that's only
+# touching docs, and so test runs aren't gated on the deploy path filter.
+#
+# Three checks, in dependency order: biome check (lint + format),
+# tsc --build across workspaces, vitest run across workspaces. Each step
+# fails the workflow on non-zero exit. The library's bundle step is run
+# before typecheck because demo typechecking imports the built library
+# via workspace alias.
+
+name: Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install workspace deps
+        run: npm ci
+
+      - name: Lint + format check
+        run: npm run check
+
+      - name: Build library
+        run: npm run -w @oracaus/coherent-derivation build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test

@@ -1,0 +1,18 @@
+{
+  "$schema": "scipy.optimize.least_squares cross-validation reference",
+  "description": "Output of scipy.optimize.least_squares (TRF method) on the same SVI calibration as gatheral-skewed.json. Regenerate via demo/tools/generate-scipy-reference.py.",
+  "scipyVersion": "1.13.0",
+  "method": "trf",
+  "loss": "linear",
+  "fitsTo": "demo/test/fixtures/gatheral-skewed.json",
+  "params": {
+    "a": 0.05999999999999996,
+    "b": 0.15000000000000008,
+    "rho": -0.8499999999999996,
+    "m": 0.04999999999999997,
+    "sigma": 0.15000000000000027
+  },
+  "residualNorm": 8.666675708199898e-17,
+  "iterations": 40,
+  "tolerance": "1e-12 absolute on each parameter for clean data"
+}

@@ -1,0 +1,83 @@
+{
+  "$schema": "demo-internal SVI calibration fixture",
+  "description": "Strongly-skewed SVI calibration: rho = -0.85 (near boundary). Tests LM behaviour and reparametrisation when the skew is close to the constraint cone. Same form as gatheral-spx.json — clean synthetic IV from raw-SVI parameters; T = 0.5, 17 strikes spanning ±0.8 in log-moneyness.",
+  "citation": "Synthetic. Parameter set chosen to exercise the |rho| → 1 reparametrisation regime (b·sigma·sqrt(1-rho^2) becomes small, level constraint approaches a ≥ 0).",
+  "truth": {
+    "a": 0.06,
+    "b": 0.15,
+    "rho": -0.85,
+    "m": 0.05,
+    "sigma": 0.15
+  },
+  "timeToExpiry": 0.5,
+  "quotes": [
+    {
+      "logMoneyness": -0.8,
+      "impliedVol": 0.7718096575739909
+    },
+    {
+      "logMoneyness": -0.7000000000000001,
+      "impliedVol": 0.7353270552017486
+    },
+    {
+      "logMoneyness": -0.6000000000000001,
+      "impliedVol": 0.6970473161571566
+    },
+    {
+      "logMoneyness": -0.5,
+      "impliedVol": 0.6567163114807418
+    },
+    {
+      "logMoneyness": -0.4,
+      "impliedVol": 0.6140460037387891
+    },
+    {
+      "logMoneyness": -0.30000000000000004,
+      "impliedVol": 0.5687588211078213
+    },
+    {
+      "logMoneyness": -0.19999999999999996,
+      "impliedVol": 0.5207823714592108
+    },
+    {
+      "logMoneyness": -0.09999999999999998,
+      "impliedVol": 0.47105160047152933
+    },
+    {
+      "logMoneyness": 0,
+      "impliedVol": 0.42448105364377064
+    },
+    {
+      "logMoneyness": 0.09999999999999998,
+      "impliedVol": 0.39329907818672255
+    },
+    {
+      "logMoneyness": 0.19999999999999996,
+      "impliedVol": 0.38129989549800464
+    },
+    {
+      "logMoneyness": 0.30000000000000004,
+      "impliedVol": 0.37909666105451195
+    },
+    {
+      "logMoneyness": 0.40000000000000013,
+      "impliedVol": 0.38077105534422995
+    },
+    {
+      "logMoneyness": 0.5,
+      "impliedVol": 0.38412562360193714
+    },
+    {
+      "logMoneyness": 0.6000000000000001,
+      "impliedVol": 0.3882992580019574
+    },
+    {
+      "logMoneyness": 0.7,
+      "impliedVol": 0.39290579145883686
+    },
+    {
+      "logMoneyness": 0.8,
+      "impliedVol": 0.3977510252804829
+    }
+  ]
+}

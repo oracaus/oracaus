@@ -1,0 +1,38 @@
+{
+  "name": "@oracaus/connection-layer",
+  "version": "0.5.0-pre",
+  "description": "SharedWorker connection layer with viewport-aware backpressure for high-frequency streaming web apps. Workspace-internal in v0.5.0; not yet published.",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react/use-trading-stream.js",
+      "types": "./dist/react/use-trading-stream.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "build:clean": "tsc -b --clean",
+    "typecheck": "tsc -b"
+  },
+  "license": "MIT",
+  "author": "Przemyslaw Kalka",
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

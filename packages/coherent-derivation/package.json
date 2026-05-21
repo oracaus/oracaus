@@ -1,0 +1,73 @@
+{
+  "name": "@oracaus/coherent-derivation",
+  "version": "0.5.0",
+  "description": "A React hook for heavy async compute against streaming inputs. Emits (input, output) tagged to the same snapshot — prevents incoherent frames when async derivation outlasts the render.",
+  "keywords": [
+    "react",
+    "react-hook",
+    "web-worker",
+    "async",
+    "streaming",
+    "snapshot",
+    "coherence",
+    "atomic-commit",
+    "compute",
+    "trading-ui"
+  ],
+  "homepage": "https://demo.oracaus.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/oracaus/oracaus.git",
+    "directory": "packages/coherent-derivation"
+  },
+  "bugs": {
+    "url": "https://github.com/oracaus/oracaus/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "CHANGELOG.md",
+    "dist/index.js",
+    "dist/index.js.map",
+    "dist/types/**/*.d.ts",
+    "dist/types/**/*.d.ts.map",
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "!src/types/**"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:clean": "tsc -b --clean && rm -rf dist",
+    "bundle:report": "node scripts/bundle-report.mjs",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json --noEmit"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Przemyslaw Kalka",
+    "url": "https://www.linkedin.com/in/przemyslawkalka/?locale=en-US"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.2",
+    "@types/react-dom": "^19.2.3",
+    "esbuild": "^0.25.10",
+    "fast-check": "^4.4.1",
+    "happy-dom": "^20.9.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  }
+}

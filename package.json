@@ -1,33 +1,22 @@
 {
-  "name": "trading-ui-pipeline",
-  "version": "0.4.0",
-  "description": "Causally consistent pipeline for real-time trading UIs",
+  "name": "oracaus",
+  "version": "0.5.0-pre",
+  "description": "Compute-quantum render alignment for heavy local compute against streaming inputs in React. Monorepo root.",
+  "private": true,
   "type": "module",
-  "exports": {
-    ".": {
-      "import": "./dist/client-bridge.js",
-      "types": "./dist/client-bridge.d.ts"
-    },
-    "./react": {
-      "import": "./dist/react/use-trading-stream.js",
-      "types": "./dist/react/use-trading-stream.d.ts"
-    },
-    "./types": {
-      "import": "./dist/types.js",
-      "types": "./dist/types.d.ts"
-    }
-  },
-  "files": [
-    "dist",
-    "src"
+  "workspaces": [
+    "packages/*",
+    "demo"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "build:watch": "tsc -p tsconfig.build.json --watch",
     "test": "vitest run",
+    "test:memory": "NODE_OPTIONS='--expose-gc' vitest run",
     "bench": "vitest bench",
     "bench:memory": "node --expose-gc ./node_modules/.bin/vitest bench",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --build && npm run typecheck --workspaces --if-present",
+    "build": "tsc --build",
+    "build:clean": "tsc --build --clean",
+    "demo:prod": "npm run -w @oracaus/demo build && npm run -w @oracaus/demo preview",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "check": "biome check .",
@@ -39,23 +28,15 @@
   "engines": {
     "node": ">=18"
   },
-  "peerDependencies": {
-    "react": ">=18"
-  },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
-  },
   "keywords": [],
   "author": "Przemyslaw Kalka",
   "license": "MIT",
   "devDependencies": {
-    "@biomejs/biome": "^2.4.10",
-    "@types/node": "^25.5.2",
+    "@biomejs/biome": "^2.4.14",
+    "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "simple-git-hooks": "^2.13.1",
-    "typescript": "^6.0.2",
-    "vitest": "^3.2.0"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   }
 }

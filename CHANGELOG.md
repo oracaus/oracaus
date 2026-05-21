@@ -1,70 +1,47 @@
 # Changelog
 
-## v0.6.0 (Planned) — Synthetic Feed Generator + Interactive Demo
+All notable changes to this project are documented in this file.
 
-Builds on v0.5.0's batched emit and v0.4.0's freshness semantics. Both features below assume the gate (a) emits once per synchronous burst and (b) no longer conflates stale Greeks with current positions under `byEventTimestamp`/`byGlobalSequence` feeds — the demo's comparison and the synthetic feed's `step(n)` mode only make sense against that cadence and that correctness floor.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-### New: Synthetic feed generator (`src/synthetic/`)
+## [Unreleased]
 
-Self-contained `FeedSimulator` with no runtime dependencies: GBM spot prices (Euler-Maruyama), Black-Scholes Greeks (Abramowitz & Stegun normCdf), Poisson fill arrivals (exponential inter-arrivals), and log-normal latency parameterised by (p50, p99). `synchronous: true` + `step(n)` mode for deterministic bench load generation. In `step(n)` mode the generator drives the gate through its batched emit path, exercising the same code consumers will hit in production.
+## [0.5.0]
 
-### New: Interactive demo (`demo/`)
+### Breaking
 
-Vite + React blotter. Two gates run simultaneously on the same synthetic feed: wall-clock (v0.1.0) and causal (v0.3.0+). Per-row coherence indicators, rolling partial rate comparison, and a Volatility Shock button that spikes λ×5 and σ×3 to stress the gate. With batched emit in place, each gate emits once per conceptual event, so wall-clock's degradation shows up as visibly wrong rows (mixed causality flagged as coherent), not as visually faster updates — the demo's job is to make this failure mode legible.
+The library's architectural shape pivots from cross-stream causal coherence on the client to render alignment for heavy local compute against streaming inputs. The pre-pivot v0.4.0 library is preserved in git history; v0.5.0 is the first release of the new shape.
 
----
+The `strategy: 'compute-quantum-aligned' | 'cancel-restart'` option is removed. Inputs split into two named slots — `streaming` (changes don't cancel in-flight) and `intent` (changes cancel-and-restart). Mixed UIs declaring both are first-class. Migration:
 
-## v0.5.0 (Planned) — Batched Emit
+| Old                                                    | New                                     |
+| ------------------------------------------------------ | --------------------------------------- |
+| `strategy: 'compute-quantum-aligned'` with `inputs: X` | `streaming: X` (no `intent`)            |
+| `strategy: 'cancel-restart'` with `inputs: X`          | `intent: X` (no `streaming`)            |
+| Mixed (was unrepresentable)                            | both `streaming` and `intent` populated |
 
-A single-purpose breaking release that changes `RenderGate`'s emit cadence from synchronous-per-update to microtask-batched. Sequenced after v0.4.0's freshness fix: batching is an ergonomics/throughput change, and batching incorrect-by-construction emits would only obscure the underlying semantic gap. With freshness corrected first, batched emit becomes a pure mechanical consolidation.
+The compute function's first arg changes from `inputs` to `{ streaming, intent }`. The result type is unchanged (`data`, `isComputing`, `dataSnapshotId`, `computingSnapshotId`, `error`, `cancel`).
 
-### Motivation
+### Removed
 
-In v0.3.0 the gate emits synchronously on every resolved update. Under a synchronous burst of N updates (the canonical case: a 500-instrument rebalance where all positions and all greeks arrive in the same tick), this fires N emits × O(N) snapshot construction = **O(N²) per burst**. More importantly, it emits N intermediate snapshots that consumers should never see as distinct frames — a rebalance is one conceptual event, not N.
+- `RenderGate` and cross-stream coherence machinery (the `byCorrelationId` / `byEventTimestamp` / `byGlobalSequence` extractors; `freshness`, `anchorStream`, gap-detection types; the gate's 46-test suite).
 
-v0.5.0 collapses all emits that resolve within the same synchronous burst into a single emit, scheduled via `queueMicrotask`. The gate becomes microtask-debounced: every state write (`updatePrices`, `updatePositions`, `updateGreeks`) schedules a flush if one isn't already pending, and the flush runs at the end of the current tick. This is semantically correct for a render gate — renders are frame-scoped — and aligns the gate's emit cadence with the BackpressureValve upstream.
+### Added
 
-### What this fixes
+- `useCoherentDerivation<TStreaming, TIntent, TOutput>` hook with two named input kinds (`streaming`, `intent`).
+- Both input slots accept either a raw value or a `Source<T>` — a subscription-shaped value following React's `useSyncExternalStore` shape. Raw values fit low-rate inputs (sliders, mode toggles); `Source<T>` is the load-bearing shape for high-rate streams where the substrate subscribes once and consumes pushes without forcing a host re-render per event.
+- `useEventSource(subscribe, initial?)` — bridges a subscribe-shaped upstream feed into a `Source<T>` in one line. Canonical adopter pattern for high-rate streaming inputs (option chains, position updates, sensor feeds).
+- `useCallbackSource<T>(initial?)` — returns `[Source<T>, push]` for imperative-push flows.
+- `Source<T>` interface + `SourceBrand` symbol + `isSource` type guard exported — adopters with non-imperative upstreams (RxJS, Solid, MobX, SSE) construct their own `Source<T>` against the published interface.
+- Worker protocol types (`WorkerInbound`, `WorkerOutbound`, `ComputeRequest`, `AbortRequest`, `ResultResponse`, `ErrorResponse`, `WorkerCrashResponse`, `SerializedError`) and `SnapshotId` exported, **semver-stable from v0.5.0**.
+- Custom-worker integration via `workerFactory` for non-trivial compute that can't cross as a stringified closure.
+- Vol-surface demo (`demo/`) with naive-vs-gated panels demonstrating the alignment guarantee under shock.
+- `sideEffects: false` declared on the published package — adopter bundlers tree-shake unused exports.
 
-- **O(N²) → O(N) per burst.** A 500-instrument rebalance does one snapshot construction, not 500. The v0.3.0 bench's 500-instrument cliff (15.9 ops/sec for v0.3.0, 19.6 for passthrough) should flatten entirely — both variants converge on the single-flush cost and the 1.23x gap collapses.
-- **Wall-clock over-emission asymmetry eliminated.** In v0.3.0, once the wall-clock gate becomes coherent, every subsequent `updatePositions`/`updateGreeks` call re-emits a full snapshot (~2N−1 emits per iteration for N instruments). The causal path only emits once per causal-key resolution (~N emits). This produced the counterintuitive 1.91x speedup of 100% causal over 0% wall-clock in the mixed causal fraction bench — not because causal is cheaper per emit, but because wall-clock over-emits. v0.4.0 collapses both paths to exactly one emit per burst; the asymmetry disappears. Throughput differences between the two gates then reflect coherence-logic cost only, which is where it belongs.
-- **Paves the way for v0.6.0's demo.** The side-by-side wall-clock vs causal comparison is only honest if each gate emits once per conceptual event. Without batching, wall-clock would appear to update "faster" purely due to over-emission, obscuring the failure mode the demo is meant to highlight.
+### Internal (not on the publish path)
 
-### Implementation notes for the rewrite
-
-1. **`queueMicrotask`, not `requestAnimationFrame`.** rAF isn't available in SharedWorker context. Microtask flushes at the end of the current synchronous burst, which naturally groups a single WebSocket message handler's updates into one emit and collapses synchronous bench loops into one frame. Consumers wanting additional rAF-level batching should layer it at the React boundary, not inside the gate.
-
-2. **`flushPending` boolean guards the schedule.** First write in a tick schedules via `queueMicrotask`; subsequent writes in the same tick check the flag and skip scheduling (they still mutate state normally). On flush, clear the flag, then run the existing `emit()` logic exactly once over the accumulated state.
-
-3. **Hold timers continue to fire on wall-clock time.** Hold timers use real `setTimeout` and are unchanged. A hold-timer expiry routes through the same `scheduleFlush` path — so if a hold timer fires during a pending synchronous burst, it does not produce an extra emit, it ensures the pending burst is flushed with `isPartial: true` for the expired instrument.
-
-4. **`isPartial` and gap-flag aggregation across the burst.** When multiple instruments resolve in the same microtask and one of them has an unresolved gap, the batched snapshot's `isPartial` must be `true`. v0.3.0's "consumed on first coherent delivery" semantics still hold — the gap is acknowledged exactly once, just now on a potentially-batched emit. Aggregation rule: `isPartial = OR across all instruments touched this flush`.
-
-5. **`sequenceId` semantics tighten.** One `sequenceId` increment per flush, not per internal resolution. This is strictly cleaner than v0.3.0 where a 500-instrument rebalance burns 500 sequence IDs — the number now corresponds to conceptual frames, not write events. Unit test **D9** (sequenceId monotonicity) stays valid; test **D15** (500-instrument independent fills) will need the expected emit count updated from 500 to 1.
-
-6. **`destroy()` must cancel the pending flush.** Set a `destroyed` boolean; guard the top of the queued `emit()` callback on it. Unit test **D14** ("no emit after destroy") will catch a regression.
-
-7. **Test migration (~46 tests).** Tests that assert on `snapshots` immediately after an update call must insert `await flushMicrotasks()` (helper: `() => new Promise(r => queueMicrotask(r))`) before the assertion. Add the helper to the test harness once; wire it into each assertion site. Mechanical — no logic changes.
-
-8. **`client-bridge` and `use-trading-stream` forward the batched cadence naturally.** Both consume `(snapshot) => ...` callbacks and neither assumes synchronous emit. No changes expected in the tab-side or React-hook layers.
-
-9. **Benchmark updates.** `gate-throughput.bench.ts`'s 500-instrument case will need its expected-performance commentary updated; the "mixed causal fraction" suite will need its narrative rewritten since the ~1.91x ratio is the bug being fixed, not the feature being measured. Consider adding a new bench that measures coherence-logic cost in isolation (post-batching) to replace what the mixed-fraction suite currently implies.
-
-10. **Fold in v0.4.0's deferred type-level narrowing.** v0.4.0 shipped the monotonic-freshness runtime semantics but deliberately left `freshness` permissive at the type level (violations are caught at construction via `throw new Error(...)`). Batched emit already requires touching `RenderGateConfig` internals (`flushPending`, `destroyed`, the scheduler surface) — this is the natural consolidation point for the type-level refactor rather than forcing a standalone v0.4.1 release. Scope:
-    - Introduce a discriminated `RenderGateConfig` keyed on the extractor's `__sequenced` / `compare` brand. `byCorrelationId` narrows `freshness` on every stream to `"match"` only; `byEventTimestamp` / `byGlobalSequence` permit both.
-    - `anchorStream` narrowing: reject at compile time when it names a `passThrough: true` stream or an undeclared stream. Today both are runtime throws in `render-gate.ts` (look for the "Runtime validation" block — all three checks there become compile errors, and the block itself can likely be deleted).
-    - Convert **D22** (`freshness: "monotonic"` with `byCorrelationId`) and **D23** (anchor passThrough / unknown) from `toThrow()` runtime assertions to `@ts-expect-error` or `expectTypeOf` type-level tests. The "anchorStream omitted entirely" sub-test in D22 is already `@ts-expect-error` — the pattern is established.
-    - Update the v0.4.0 CHANGELOG's "Validation & Type Safety" section to drop the "candidate follow-up" caveat, and add the narrowing row to v0.5.0's breaking-changes table (below).
-    - Watch for inference regressions in helper factories / generic wrappers around `RenderGate`. Conditional types interact poorly with `Partial<Record<StreamId, …>>`, and `byEventTimestamp`'s `compare` being optional (`readonly compare?`) on `CoherenceKeyExtractor` means the discriminant likely needs to be the `__sequenced` brand, not the presence of `compare`.
-
-### Breaking changes
-
-| Symbol                        | Change                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------- |
-| `RenderGate` emit semantics   | Synchronous per-update → microtask-batched (one emit per synchronous burst) |
-| `CoherentSnapshot.sequenceId` | Incremented once per flush, not once per internal resolution                |
-| `RenderGateConfig` (typed)    | `byCorrelationId` narrows `freshness` to `"match"` only; passThrough / unknown `anchorStream` becomes a compile error (was runtime throw in v0.4.0) |
-| Test-side assertions          | Must `await flushMicrotasks()` between state writes and snapshot assertions |
+- Connection layer (`packages/connection-layer/`) — SharedWorker + BackpressureValve + multi-tab patterns. Workspace-internal design reference; not on the publish path.
+- SVI fitter (`demo/src/svi/`) — demo-internal calibration engine; not a library primitive.
 
 ---
 
@@ -139,12 +116,12 @@ D1–D16 pass unchanged — they all use `byCorrelationId` and the default `"mat
 
 ### Breaking Changes
 
-| Symbol                  | Change                                                                                                |
-| ----------------------- | ----------------------------------------------------------------------------------------------------- |
-| `RenderGateConfig`      | adds **required** `anchorStream: StreamId`. Every v0.3.0 config must add this field to compile.       |
-| `StreamConfig`          | adds optional `freshness: "match" \| "monotonic"` (default `"match"`).                                |
-| `CoherenceKeyExtractor` | adds optional `compare(a, b): -1 \| 0 \| 1`. Present on `byEventTimestamp` / `byGlobalSequence`.      |
-| Coherence semantics     | Non-passThrough streams with `freshness: "monotonic"` are coherent when key ≥ anchor's key.           |
+| Symbol                  | Change                                                                                           |
+| ----------------------- | ------------------------------------------------------------------------------------------------ |
+| `RenderGateConfig`      | adds **required** `anchorStream: StreamId`. Every v0.3.0 config must add this field to compile.  |
+| `StreamConfig`          | adds optional `freshness: "match" \| "monotonic"` (default `"match"`).                           |
+| `CoherenceKeyExtractor` | adds optional `compare(a, b): -1 \| 0 \| 1`. Present on `byEventTimestamp` / `byGlobalSequence`. |
+| Coherence semantics     | Non-passThrough streams with `freshness: "monotonic"` are coherent when key ≥ anchor's key.      |
 
 **Migration.** Add `anchorStream: "positions"` (or whichever non-passThrough stream is your causal reference) to every `new RenderGate(...)` site. Nothing else is required — defaults reproduce v0.3.0 behaviour byte-for-byte. On sequenced feeds, opt into `freshness: "monotonic"` on streams that are pure functions of market state (typically Greeks) to pick up the correctness fix.
 

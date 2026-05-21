@@ -1,0 +1,127 @@
+@import "tailwindcss";
+
+/*
+ * Financial-domain theme.
+ *
+ * Register: desk-operator, not designer-portfolio. Monospace for every
+ * numeric (parameters, residuals, latency, table cells); Inter for labels
+ * and headings. Tabular-nums on every digit so columns align by decimal
+ * place. OKLCH palette anchored on slate so the colour wheel stays
+ * perceptually neutral; accent green / amber for "coherent / no-arb pass"
+ * vs "tearing / arb violation".
+ *
+ * `--font-mono` is the load-bearing decision: every number on screen renders
+ * in JetBrains Mono with `font-variant-numeric: tabular-nums` so two
+ * different-length parameter values (`0.04561` vs `-0.99213`) align by the
+ * decimal column without padding tricks.
+ */
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Palette — slate base, OKLCH for perceptually-uniform lightness steps. */
+  --color-bg: oklch(0.18 0.012 240);
+  --color-bg-elev: oklch(0.22 0.012 240);
+  --color-fg: oklch(0.94 0.008 240);
+  --color-fg-muted: oklch(0.68 0.012 240);
+  --color-border: oklch(0.3 0.014 240);
+
+  /* Accents — restrained, two-state semantic (pass / fail). */
+  --color-accent-ok: oklch(0.72 0.16 145);
+  /* coherent / arb-free */
+  --color-accent-stale: oklch(0.66 0.2 28);
+  /* tearing / violating */
+  --color-accent-info: oklch(0.7 0.13 230);
+  /* informational */
+  --color-accent-warn: oklch(0.82 0.17 85);
+  /* alert / caution — shock */
+}
+
+/* Tabular numerics for everything monospace. Adopters reading two numbers
+ * one above the other expect the decimal point in the same column. */
+.font-mono,
+code,
+kbd,
+pre,
+samp {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings:
+    "tnum" 1,
+    "ss01" 1;
+}
+
+/* Reduce-motion adopters get instant transitions. */
+@media (prefers-reduced-motion: reduce) {
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Block tap highlights on mobile (we're desktop-first but no reason to
+ * keep iOS's blue flash). */
+html {
+  -webkit-tap-highlight-color: transparent;
+  text-rendering: optimizeLegibility;
+}
+
+/* Shared focus ring. Single source of truth so every interactive element
+ * (button, link, custom-styled form control) gets the same keyboard
+ * affordance — 2 px solid outline in accent-info, offset by 2 px from the
+ * element so it doesn't smother the border. accent-info is the demo's
+ * "informational" colour; reusing it for focus avoids introducing a new
+ * accent slot purely for keyboard nav. */
+@layer components {
+  .focus-ring {
+    @apply focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-info;
+  }
+}
+
+/* Scrollbar treatment. Slate-palette match for the demo's dark register;
+ * without this the OS-default scrollbar (chunky + bright on Windows /
+ * Linux Chrome + Firefox) jars against the deep-slate background.
+ *
+ * `scrollbar-width: thin` + `scrollbar-color` is the modern Firefox path.
+ * `::-webkit-scrollbar` covers Chrome / Safari / Edge.
+ *
+ * macOS overlay scrollbars (default on touchpads) honour `::-webkit-scrollbar`
+ * styling only while visible (during scroll) — the styling doesn't add
+ * persistent chrome where there'd otherwise be none. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+  /* 2 px transparent border carves the thumb visually narrower than the
+   * track width without changing the layout space (background-clip
+   * confines the colour to the inner box). */
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-fg-muted);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* Firefox honours `scrollbar-color` directly but doesn't have a hover
+ * variant. Acceptable — the static `--color-border` thumb is quiet
+ * enough that hover-state polish isn't load-bearing there. */

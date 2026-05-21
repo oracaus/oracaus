@@ -1,18 +1,8 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM", "WebWorker"],
-    "types": ["vitest/globals", "node"],
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "outDir": "dist",
-    "rootDir": "src",
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true
-  },
-  "include": ["src"]
+  "files": [],
+  "references": [
+    { "path": "./packages/coherent-derivation" },
+    { "path": "./packages/connection-layer" },
+    { "path": "./demo" }
+  ]
 }

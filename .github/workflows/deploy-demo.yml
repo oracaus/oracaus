@@ -1,0 +1,92 @@
+# Phase 3 Week 5 deploy workflow.
+#
+# Builds the @oracaus/coherent-derivation library + the @oracaus/demo
+# Vite app, uploads the static output to GitHub Pages via the modern
+# Actions deploy path (not the gh-pages branch). Triggers only when the
+# deployable surface changes — `demo/**` or `packages/coherent-derivation/**`
+# — to avoid wasting builds on unrelated commits.
+#
+# Pages source must be set to "GitHub Actions" in the repository settings
+# (Settings → Pages → Build and deployment → Source: GitHub Actions).
+# A one-time setup; the workflow does not configure this itself.
+#
+# Custom domain: the deployed site is served at `https://demo.oracaus.dev`
+# via the CNAME file in `demo/public/CNAME` (Vite copies `public/*` into
+# `dist/*` verbatim, so the CNAME survives every deploy). Vite is
+# configured with `base: "/"` (see demo/vite.config.ts) — assets resolve
+# at the subdomain root. The legacy `oracaus.github.io/oracaus/` URL
+# continues to serve via GitHub's automatic 301 redirect to the custom
+# domain once Pages settings recognise the CNAME.
+
+name: Deploy demo to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "demo/**"
+      - "packages/coherent-derivation/**"
+      - ".github/workflows/deploy-demo.yml"
+  workflow_dispatch:
+
+# Permissions for `actions/deploy-pages` (modern Pages deploy path).
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, but don't cancel in-progress runs;
+# we want every push that lands to be deployed in order.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install workspace deps
+        run: npm ci
+
+      # The library uses `tsc -b` + esbuild via its own scripts/build.mjs;
+      # it must be built before the demo since the demo imports it via
+      # workspace alias. Vite's dev mode aliases through to source, but
+      # the production build wants the actual built artefact.
+      - name: Build library
+        run: npm run -w @oracaus/coherent-derivation build
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build demo (Vite)
+        env:
+          # Enables the Umami analytics snippet injection in
+          # demo/vite.config.ts. Unset locally so dev / preview usage
+          # doesn't skew metrics.
+          VITE_UMAMI_ENABLED: "true"
+        run: npm run -w @oracaus/demo build
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: demo/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -3,11 +3,11 @@
 // companion to the smile charts.
 //
 // Layout: full-height flex column inside its parent rail.
-//   - Hero card (pinned, shrink-0): NAIVE Σ|miss| / max above GATED —
+//   - Hero card (pinned, shrink-0): NAIVE Σ|miss| / max above ORACAUS —
 //     the headline number-vs-number contrast.
 //   - Section label (pinned, shrink-0).
 //   - Per-strike rows (scrollable, flex-1 min-h-0 overflow-y-auto):
-//     log-moneyness + NAIVE miss + GATED miss per row, sticky thead.
+//     log-moneyness + NAIVE miss + ORACAUS miss per row, sticky thead.
 //
 // Row count is `nStrikesPerSlice` (default 200). Native CSS overflow-y-auto
 // scrolling beats virtualization at this row count: 200 DOM rows × the
@@ -144,10 +144,10 @@ export const OptionChainTable = memo(function OptionChainTable({
     return bestIdx;
   }, [rows, hoveredK]);
 
-  // Mismark ratio for the hero bar — naive's Σ|miss| vs gated's. Used
+  // Mismark ratio for the hero bar — naive's Σ|miss| vs Oracaus's. Used
   // to visualise "how much worse is naive right now". Floored at 1×
-  // (gated is the reference); capped at 50× to keep the bar readable
-  // when gated drops to LM-noise floor and naive blows up.
+  // (Oracaus is the reference); capped at 50× to keep the bar readable
+  // when Oracaus drops to LM-noise floor and naive blows up.
   const mismarkRatio =
     naiveSummary !== undefined &&
     gatedSummary !== undefined &&
@@ -157,7 +157,7 @@ export const OptionChainTable = memo(function OptionChainTable({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-bg-elev contain-[layout_style]">
-      {/* HERO — the demo's headline. Big NAIVE vs GATED Σ|miss| numbers
+      {/* HERO — the demo's headline. Big NAIVE vs ORACAUS Σ|miss| numbers
           side-by-side. Mismark-ratio bar below. The "this is what the
           library buys you" frame, in one card. */}
       <div className="shrink-0 border-b border-border px-4 pt-3 pb-4">
@@ -173,7 +173,7 @@ export const OptionChainTable = memo(function OptionChainTable({
             <span className="inline-block w-[5ch] text-right tabular-nums text-accent-stale">
               {mismarkRatio === undefined ? "—" : `${mismarkRatio.toFixed(1)}×`}
             </span>{" "}
-            gated
+            oracaus
           </span>
         </div>
         <div className="grid grid-cols-2 gap-4">
@@ -184,7 +184,7 @@ export const OptionChainTable = memo(function OptionChainTable({
             max={naiveSummary?.max}
           />
           <HeroValue
-            label="GATED"
+            label="ORACAUS"
             tone="ok"
             value={gatedSummary?.sum}
             max={gatedSummary?.max}
@@ -233,14 +233,17 @@ export const OptionChainTable = memo(function OptionChainTable({
           </colgroup>
           <thead className="sticky top-0 z-10">
             <tr className="text-fg-muted">
-              <th className="border-b border-border bg-bg-elev px-2 py-0.5 text-left font-normal uppercase tracking-wide">
-                k
+              <th
+                className="border-b border-border bg-bg-elev px-2 py-0.5 text-left font-normal uppercase tracking-wide"
+                title="log-moneyness: k = log(K/F)"
+              >
+                log-money
               </th>
               <th className="border-b border-l border-border bg-bg-elev px-2 py-0.5 text-right font-normal uppercase tracking-wide text-accent-stale">
                 naive
               </th>
               <th className="border-b border-l border-border bg-bg-elev px-2 py-0.5 text-right font-normal uppercase tracking-wide text-accent-ok">
-                gated
+                oracaus
               </th>
             </tr>
           </thead>

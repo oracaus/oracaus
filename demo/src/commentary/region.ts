@@ -10,8 +10,8 @@
 //
 //   - `toolbar`          — top control bar (tick / expiries / slice / repair-mode)
 //   - `naive-panel`      — top smile panel (NAIVE) including its metric ribbon
-//   - `gated-panel`      — bottom smile panel (GATED) including its metric ribbon
-//   - `chain-table`      — option-chain table (per-strike naive vs gated rows)
+//   - `gated-panel`      — bottom smile panel (ORACAUS) including its metric ribbon
+//   - `chain-table`      — option-chain table (per-strike naive vs Oracaus rows)
 //   - `mismark-sparkline` — last-60 s mismark trace at the bottom of the rail
 //
 // Toolbar buttons, panel chip rails, and per-cell rows all resolve to

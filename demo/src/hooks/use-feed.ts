@@ -12,7 +12,7 @@
 //
 //   - `subscribeTick(cb)` — fires for every logical tick at full rate.
 //     Used by both the naive panel (post-on-every-input to its worker)
-//     and the gated panel (via `useEventSource` into the substrate)
+//     and the Oracaus panel (via `useEventSource` into the substrate)
 //     without paying for a React render per tick.
 //
 // Without the flush boundary, 500 Hz × full-tree reconciles (two

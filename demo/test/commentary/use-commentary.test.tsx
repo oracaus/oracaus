@@ -179,7 +179,7 @@ describe("OBSERVATION steady state + scenario-entry", () => {
     });
 
     expect(result.current.phase).toBe("OBSERVATION");
-    expect(result.current.toasts[0]?.id).toBe("scenario-S1-canonical-v1");
+    expect(result.current.toasts.at(-1)?.id).toBe("scenario-S1-canonical-v1");
   });
 
   it("scenario change updates the entry phrase (S1 → S4 on shock)", async () => {
@@ -197,7 +197,7 @@ describe("OBSERVATION steady state + scenario-entry", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(150);
     });
-    expect(result.current.toasts[0]?.id).toBe("scenario-S1-canonical-v1");
+    expect(result.current.toasts.at(-1)?.id).toBe("scenario-S1-canonical-v1");
 
     shockActive = true;
     rerender();
@@ -209,8 +209,8 @@ describe("OBSERVATION steady state + scenario-entry", () => {
       await vi.advanceTimersByTimeAsync(8_000);
     });
 
-    expect(result.current.toasts[0]?.id).toBe("scenario-S4-shock-v1");
-    expect(result.current.toasts[0]?.tier).toBe(1);
+    expect(result.current.toasts.at(-1)?.id).toBe("scenario-S4-shock-v1");
+    expect(result.current.toasts.at(-1)?.tier).toBe(1);
   });
 
   it("scenario-entry phrase id uses the namespace `scenario-{name}-v1`", async () => {
@@ -223,7 +223,7 @@ describe("OBSERVATION steady state + scenario-entry", () => {
       await vi.advanceTimersByTimeAsync(150);
     });
 
-    expect(result.current.toasts[0]?.id).toMatch(
+    expect(result.current.toasts.at(-1)?.id).toMatch(
       /^scenario-S[0-9]-[a-z-]+-v1$/,
     );
   });
@@ -240,7 +240,7 @@ describe("OBSERVATION steady state + scenario-entry", () => {
     });
     const tAfter = Date.now();
 
-    const toast = result.current.toasts[0];
+    const toast = result.current.toasts.at(-1);
     expect(toast).toBeDefined();
     if (toast === undefined) throw new Error("expected a toast");
     expect(toast.tier).toBe(3);
@@ -335,8 +335,8 @@ describe("Stage 6 detector + Stage 7 scheduler wiring", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(150);
     });
-    expect(result.current.toasts[0]?.id).toBe("scenario-S0-baseline-v1");
-    expect(result.current.toasts[0]?.tier).toBe(4);
+    expect(result.current.toasts.at(-1)?.id).toBe("scenario-S0-baseline-v1");
+    expect(result.current.toasts.at(-1)?.tier).toBe(4);
 
     shockActive = true;
     rerender();
@@ -344,8 +344,8 @@ describe("Stage 6 detector + Stage 7 scheduler wiring", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    expect(result.current.toasts[0]?.id).toBe("event-ShockStart-v1");
-    expect(result.current.toasts[0]?.tier).toBe(1);
+    expect(result.current.toasts.at(-1)?.id).toBe("event-ShockStart-v1");
+    expect(result.current.toasts.at(-1)?.tier).toBe(1);
   });
 
   it("RepairFailed event surfaces as a toast", async () => {
@@ -371,8 +371,8 @@ describe("Stage 6 detector + Stage 7 scheduler wiring", () => {
       await vi.advanceTimersByTimeAsync(100);
     });
 
-    expect(result.current.toasts[0]?.id).toBe("event-RepairFailed-v1");
-    expect(result.current.toasts[0]?.tier).toBe(1);
+    expect(result.current.toasts.at(-1)?.id).toBe("event-RepairFailed-v1");
+    expect(result.current.toasts.at(-1)?.tier).toBe(1);
   });
 });
 
@@ -406,13 +406,13 @@ describe("Cancel-on-settings ack", () => {
       await vi.advanceTimersByTimeAsync(450);
     });
 
-    expect(result.current.toasts[0]?.id).toBe("ack-expiries-v1");
+    expect(result.current.toasts.at(-1)?.id).toBe("ack-expiries-v1");
     // Visual tier is 4 (muted/observation) — acks confirm a user
     // control change, not a critical alert. Scheduler priority is
     // still T1 for preempt; only the toast's visual presentation
     // is downgraded. See `visualTierFor` in use-commentary.ts.
-    expect(result.current.toasts[0]?.tier).toBe(4);
-    expect(result.current.toasts[0]?.text).toBe(
+    expect(result.current.toasts.at(-1)?.tier).toBe(4);
+    expect(result.current.toasts.at(-1)?.text).toBe(
       "Surface now spans thirty expiries.",
     );
   });
@@ -441,7 +441,7 @@ describe("Cancel-on-settings ack", () => {
     });
     const tAfter = Date.now();
 
-    const ack = result.current.toasts[0];
+    const ack = result.current.toasts.at(-1);
     expect(ack?.id).toBe("ack-expiries-v1");
     // Visual tier is 4 (muted/observation) — see `visualTierFor`.
     // Scheduler priority remains T1 (for preempt semantics); only
@@ -479,8 +479,8 @@ describe("Cancel-on-settings ack", () => {
     });
 
     expect(result.current.phase).toBe("OBSERVATION");
-    expect(result.current.toasts[0]?.id).toBe("ack-expiries-v1");
-    expect(result.current.toasts[0]?.text).toBe(
+    expect(result.current.toasts.at(-1)?.id).toBe("ack-expiries-v1");
+    expect(result.current.toasts.at(-1)?.text).toBe(
       "Surface now spans thirty expiries.",
     );
   });
@@ -513,8 +513,8 @@ describe("Cancel-on-settings ack", () => {
     });
 
     expect(result.current.phase).toBe("OBSERVATION");
-    expect(result.current.toasts[0]?.id).toMatch(/^event-ShockStart-v\d+$/);
-    expect(result.current.toasts[0]?.tier).toBe(1);
+    expect(result.current.toasts.at(-1)?.id).toMatch(/^event-ShockStart-v\d+$/);
+    expect(result.current.toasts.at(-1)?.tier).toBe(1);
   });
 
   it("shock during INTRO is a no-op in recording mode (canonical take protected)", async () => {
@@ -582,8 +582,8 @@ describe("Cancel-on-settings ack", () => {
       await vi.advanceTimersByTimeAsync(450);
     });
 
-    expect(result.current.toasts[0]?.id).toBe("ack-expiries-v1");
-    expect(result.current.toasts[0]?.text).toBe(
+    expect(result.current.toasts.at(-1)?.id).toBe("ack-expiries-v1");
+    expect(result.current.toasts.at(-1)?.text).toBe(
       "Surface now spans twelve expiries.",
     );
 

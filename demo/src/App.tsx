@@ -2,14 +2,14 @@
 //
 //   - useFeed: synthetic chain feed
 //   - useNaiveFit + useGatedFit: paired worker-backed fit-state hooks
-//   - Vertical-panel + right-rail layout: NAIVE (top), GATED (bottom),
+//   - Vertical-panel + right-rail layout: NAIVE (top), ORACAUS (bottom),
 //     option chain (right rail). 100vh / 100vw, no page scroll. Trading-
 //     workstation aesthetic — every pixel earns its place.
 //
 // Information architecture:
 //   - Top bar (~56 px): title + status (tick/spot/seed) + controls inline
 //   - Main (flex-1):
-//       - Left column (flex-1): NAIVE panel above GATED panel, equal split
+//       - Left column (flex-1): NAIVE panel above ORACAUS panel, equal split
 //       - Right rail (fixed 420 px): OPTION CHAIN, full-height
 //
 // Below 1024 × 700 the side-by-side rail can't fit; we render a notice
@@ -19,7 +19,7 @@
 // The demo's central message:
 //   Both panels run the SAME worker against the SAME feed. Only the
 //   synchronisation strategy differs. Naive renders dots and curves
-//   from independent state slots → tearing. Gated renders them as a
+//   from independent state slots → tearing. Oracaus renders them as a
 //   coherent (input, output) pair via the library → no tearing.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -28,7 +28,7 @@ import type { RegionId } from "./commentary/region.js";
 import { useCommentary } from "./commentary/use-commentary.js";
 import { AdvancedControls } from "./components/AdvancedControls.js";
 import { CommentaryToastStack } from "./components/CommentaryToastStack.js";
-import { Controls } from "./components/Controls.js";
+import { Controls, DISPLAY_MATURITIES } from "./components/Controls.js";
 import { GithubIcon, LinkedInIcon, NpmIcon } from "./components/icons.js";
 import { MismarkSparkline } from "./components/MismarkSparkline.js";
 import { OptionChainTable } from "./components/OptionChainTable.js";
@@ -179,7 +179,7 @@ export function App() {
   const [repairMode, setRepairMode] = useState<"on" | "off">("on");
 
   // Bumps every time `repairMode` (the only intent input) changes. The
-  // gated panel uses this to flash its fitting chip — `isComputing`
+  // Oracaus panel uses this to flash its fitting chip — `isComputing`
   // stays continuously true across cancel-and-restart (worker aborts
   // and immediately restarts) so the chip text alone never changes;
   // the bumped key gives the panel a one-shot trigger to surface the
@@ -220,7 +220,7 @@ export function App() {
   //
   // No visual tint on the region itself — the tint indicator was
   // reverted post-implementation as audience-mismatched. The toast
-  // text names the region ("Naive's mismark…", "Gated never shows…"),
+  // text names the region ("Naive's mismark…", "Oracaus never shows…"),
   // which is the only anchor the senior audience needs.
   //
   // State lives outside the 5 Hz `useThrottled` boundary so hover
@@ -315,6 +315,15 @@ export function App() {
     return { displayMaturityIdx: idx, displayMaturityT: ladder[idx] ?? 1 };
   }, [nExpiriesFitted, displayMaturityYears]);
 
+  // Panel-title expiry label — the user-selected tenor (1M / 3M / 6M /
+  // 1Y / 2Y) appearing alongside "Vol smile @" in each panel header.
+  // Derived from `displayMaturityYears` (the user's exact selection),
+  // not `displayMaturityT` (the closest ladder entry that's actually
+  // rendered) — what the user clicked is what the title shows.
+  const expiryLabel =
+    DISPLAY_MATURITIES.find((m) => m.years === displayMaturityYears)?.label ??
+    "1Y";
+
   // Anchor-based smile y-range — baseline for the current maturity.
   // Pure function of T using the synthetic feed's anchor params.
   const anchorYRange = useMemo(
@@ -364,7 +373,7 @@ export function App() {
     [gated.data, displayMaturityIdx, nExpiriesFitted],
   );
   // The naive panel's "latest input view" is the 5 Hz throttled feed
-  // tick — same source the gated panel's lag chip (currentTickIndex)
+  // tick — same source the Oracaus panel's lag chip (currentTickIndex)
   // uses. Single source of truth for "current displayed tick"; no
   // separate antiphased 5 Hz timer can ever drift behind it. FeedTick
   // is structurally assignable to SurfaceSnapshot (extra spot/timestamp
@@ -734,7 +743,7 @@ export function App() {
         onReseed={setSeed}
       />
 
-      {/* Main grid — left column stacks NAIVE above GATED (shared
+      {/* Main grid — left column stacks NAIVE above ORACAUS (shared
           x-axis reads down the column for strike-by-strike comparison);
           right rail stacks the option-chain table and the recent-
           mismark sparkline. The sparkline takes whatever vertical
@@ -753,6 +762,7 @@ export function App() {
           >
             <Panel
               title="NAIVE"
+              subtitle={`Vol smile @ ${expiryLabel}`}
               mode="naive"
               data={naivePanelState.data}
               latestInputs={naivePanelState.latestInputs}
@@ -774,7 +784,8 @@ export function App() {
             onMouseLeave={() => leaveRegion("gated-panel")}
           >
             <Panel
-              title="GATED"
+              title="ORACAUS"
+              subtitle={`Vol smile @ ${expiryLabel}`}
               mode="gated"
               data={gatedPanelState.data}
               latestInputs={gatedPanelState.latestInputs}

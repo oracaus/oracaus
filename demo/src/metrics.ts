@@ -23,7 +23,7 @@
 //            (latestInputs, data) pair, so the lag-number-magnitude
 //            matches what the chart shows by construction.
 //
-//   GATED  — substrate's atomic commit guarantees sourceSlice and
+//   ORACAUS — substrate's atomic commit guarantees sourceSlice and
 //            fitResult.params come from the same tick. The lag chip
 //            reports staleness of that coherent snapshot relative to
 //            feed.tick's latest tick: max(0, ...) because the substrate

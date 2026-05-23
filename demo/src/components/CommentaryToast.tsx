@@ -32,7 +32,7 @@ import { memo } from "react";
  *
  *   1 critical    (shock, tear, repair-failed, queue-saturated)
  *   2 transition  (shock end, recovery)
- *   3 comparison  (naive vs. gated)
+ *   3 comparison  (naive vs. Oracaus)
  *   4 observation (chip values, settings ack)
  *   5 idle        (ambient filler)
  */

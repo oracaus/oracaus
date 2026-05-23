@@ -85,19 +85,24 @@ describe("CommentaryToastStack — rendering", () => {
     expect(toasts[0]?.instanceId).not.toBe(toasts[1]?.instanceId);
   });
 
-  it("renders toasts in the order given (newest-at-top is the hook's responsibility)", () => {
-    const toasts = [makeToast("a", "Newest."), makeToast("b", "Older.")];
+  it("renders toasts in the order given (newest-at-bottom is the hook's responsibility)", () => {
+    // Bottom-anchored stack: the newest toast sits closest to the source
+    // of the slide-in motion (the bottom of the viewport), so the hook
+    // pushes new toasts to the END of the array. Older toasts sit above,
+    // pushed up by each new arrival. The stack itself is direction-
+    // agnostic — it just renders the array in order.
+    const toasts = [makeToast("a", "Older."), makeToast("b", "Newest.")];
     const { queryAllByTestId } = render(
       <CommentaryToastStack toasts={toasts} />,
     );
     const textNodes = queryAllByTestId("commentary-toast-text");
-    expect(textNodes[0]?.textContent).toBe("Newest.");
-    expect(textNodes[1]?.textContent).toBe("Older.");
+    expect(textNodes[0]?.textContent).toBe("Older.");
+    expect(textNodes[1]?.textContent).toBe("Newest.");
   });
 });
 
 describe("CommentaryToastStack — positioning + interaction", () => {
-  it("container is fixed-positioned, top-centred, z-50, with items centred horizontally", () => {
+  it("container is fixed-positioned, bottom-centred, z-50, with items centred horizontally", () => {
     const { getByTestId } = render(
       <CommentaryToastStack toasts={[makeToast("a", "x")]} />,
     );
@@ -120,11 +125,15 @@ describe("CommentaryToastStack — positioning + interaction", () => {
     );
   });
 
-  it("top offset is 98px (just below toolbar with breathing room)", () => {
+  it("bottom offset is 13px (minimal breathing room above viewport edge)", () => {
+    // Bottom-anchored: toasts settle 13px above the viewport edge —
+    // tight enough that the stack reads as peripheral rather than
+    // central, but not flush with the edge (avoids the visually-
+    // clipped look).
     const { getByTestId } = render(
       <CommentaryToastStack toasts={[makeToast("a", "x")]} />,
     );
-    expect(getByTestId("commentary-toast-stack").style.top).toBe("98px");
+    expect(getByTestId("commentary-toast-stack").style.bottom).toBe("13px");
   });
 });
 
@@ -132,16 +141,18 @@ describe("CommentaryToastStack — entry animation", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("initial render is in the pre-entry state (opacity-0 + -translate-y-full)", () => {
-    // Two-frame entry: the toast mounts in the pre-entry state so the
-    // browser paints it once at opacity-0 before the RAF-deferred
-    // `setEntered(true)` triggers the CSS transition.
+  it("initial render is in the pre-entry state (opacity-0 + translate-y-full)", () => {
+    // Two-frame entry: the toast mounts in the pre-entry state — pushed
+    // BELOW its final position (translate-y-full = +100% in CSS, off-
+    // screen downward) — so the browser paints it once at opacity-0
+    // before the RAF-deferred `setEntered(true)` triggers the CSS
+    // transition that slides it UP into place.
     const { getByTestId } = render(
       <CommentaryToastStack toasts={[makeToast("a", "x")]} />,
     );
     const wrapper = getByTestId("commentary-toast-wrapper");
     expect(wrapper.className).toContain("transition-[opacity,transform]");
-    expect(wrapper.className).toContain("-translate-y-full");
+    expect(wrapper.className).toContain("translate-y-full");
     expect(wrapper.className).toContain("opacity-0");
   });
 

@@ -1,6 +1,6 @@
 // MismarkSparkline — bottom-of-rail history panel. Two thin lines on a
 // shared y-axis showing the last 60 s of Σ|miss| values (NAIVE in
-// stale-red, GATED in ok-green). Fills whatever vertical space the
+// stale-red, ORACAUS in ok-green). Fills whatever vertical space the
 // per-strike table doesn't claim — on tall viewports it gets a lot of
 // room and reads as a proper time-series; on short viewports it
 // collapses to a thin strip but stays useful.
@@ -33,7 +33,7 @@ function MismarkSparklineImpl({ naive, gated }: MismarkSparklineProps) {
   const naiveHistory = useSampledHistory(naive);
   const gatedHistory = useSampledHistory(gated);
 
-  // Shared y-scale — naive's max usually dominates; gated lives down at
+  // Shared y-scale — naive's max usually dominates; Oracaus lives down at
   // the LM-noise floor. Auto-scale to whichever is larger so the
   // sparkline always uses its full height.
   const yMax = Math.max(
@@ -64,7 +64,7 @@ function MismarkSparklineImpl({ naive, gated }: MismarkSparklineProps) {
               aria-hidden="true"
               className="inline-block h-0.5 w-3 bg-accent-ok"
             />
-            <span className="text-fg-muted">gated</span>
+            <span className="text-fg-muted">oracaus</span>
           </span>
         </div>
       </div>

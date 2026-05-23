@@ -1,5 +1,5 @@
 // NAIVE panel's fit-state hook. The contrast with `useCoherentDerivation`
-// (the GATED panel) is the whole point of the demo:
+// (the ORACAUS panel) is the whole point of the demo:
 //
 //   NAIVE (this hook):
 //     - Worker present (so adopters' "before" picture isn't obviously
@@ -10,7 +10,7 @@
 //       LATEST inputs (current React state) with WHATEVER fit just landed
 //       — they can be from different snapshots → tearing.
 //
-//   GATED (`useCoherentDerivation`):
+//   ORACAUS (`useCoherentDerivation`):
 //     - Same worker; same fits. Library's strategy holds visible state
 //       during in-flight compute and emits (input, output) atomically. →
 //       renderer pairs the same-snapshot inputs and output → coherent.
@@ -39,7 +39,7 @@ import type { DemoIntent, DemoSurfaceOutput } from "../types.js";
 import type { TickListener } from "./use-feed.js";
 
 // 5 Hz — matches the demo's display clock (App's `useThrottled` at
-// 200 ms, useFeed's React-state flush, the gated panel's substrate
+// 200 ms, useFeed's React-state flush, the Oracaus panel's substrate
 // commit cadence as seen by display). Drives `latestInputs` and
 // `pendingCount` flushes from this hook so all naive-panel state
 // arrives at App on the same boundary.
@@ -69,7 +69,7 @@ const MAX_PENDING_QUEUE = 20;
 /**
  * Full-surface snapshot — the multi-slice analogue of the pre-3.5
  * single-slice `FitSnapshot`. The naive panel writes this into React
- * state on the 5 Hz display flush (see hook body below); the gated
+ * state on the 5 Hz display flush (see hook body below); the Oracaus
  * panel reads the surface-aligned version out of the library's
  * atomic-emit.
  */

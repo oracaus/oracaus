@@ -249,14 +249,14 @@ function visualTierFor(id: string, tier: CommentaryTier): CommentaryTier {
   return id.startsWith("ack-") ? 4 : tier;
 }
 
-// Scripted scene-setters for the naive vs gated comparison. Tier 4;
+// Scripted scene-setters for the naive vs Oracaus comparison. Tier 4;
 // word counts above the T4 5-9 target are accepted for the one-shot
 // opening — dismiss math holds for reader-paced cadence.
 const INTRO_PHRASES: readonly PhraseSpec[] = [
   {
-    id: "intro-1", // PLAYBOOK §Demo narration ¶1 — scene
+    id: "intro-1", // PLAYBOOK §Demo narration ¶1 — scene + opt-out pointer
     tier: 4,
-    text: "Synthetic option chain at fifty ticks per second. Same feed into two panels.",
+    text: "Synthetic option chain at fifty ticks per second. Same feed into two panels. Toggle commentary off in the toolbar if you'd rather watch quiet.",
     gapAfterMs: 600,
   },
   {
@@ -274,7 +274,7 @@ const INTRO_PHRASES: readonly PhraseSpec[] = [
   {
     id: "intro-4", // PLAYBOOK §Demo narration ¶4 — substrate thesis condensed
     tier: 4,
-    text: "Naive composes whatever's ready. Gated emits only matching pairs.",
+    text: "Naive composes whatever's ready. Oracaus emits only matching pairs.",
     gapAfterMs: 600,
   },
   {
@@ -301,6 +301,13 @@ export function useCommentary(
   const recordingMode = options.recordingMode ?? detectRecordingModeFromUrl();
 
   const [state, dispatch] = useReducer(phaseReducer, INITIAL_PHASE_STATE);
+  // Default ON. The bottom-positioned toast stack no longer obstructs
+  // the smile/curve visual that the demo's central message depends on,
+  // and the INTRO sequence is the only element that translates the
+  // trader-jargon labels into plain English for visitors without
+  // options-domain context (HN traffic, in particular). Senior
+  // evaluators who prefer no narration use the toolbar toggle —
+  // intro-1 points at it explicitly.
   const [enabled, setEnabled] = useState<boolean>(true);
   const [toasts, setToasts] = useState<readonly CommentaryToastInstance[]>([]);
 
@@ -331,7 +338,11 @@ export function useCommentary(
         dismissAtMs:
           now + computeDismissMs(utterance.id, utterance.tier, utterance.text),
       };
-      setToasts((prev) => [next, ...prev].slice(0, MAX_VISIBLE_TOASTS));
+      // Newest at the END of the array — bottom-anchored stack renders
+      // in array order, so the newest toast sits closest to the slide-
+      // source (bottom of viewport). `.slice(-MAX_VISIBLE_TOASTS)` keeps
+      // the most recent N when the stack overflows.
+      setToasts((prev) => [...prev, next].slice(-MAX_VISIBLE_TOASTS));
     },
     [options.now],
   );

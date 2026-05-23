@@ -8,7 +8,7 @@
 //     measured pixel size of its container
 //   - stats strip (~36 px): single horizontal row of metric pairs
 //     `label: value · label: value · …`, panel-coloured (NAIVE = stale-
-//     red accent, GATED = ok-green accent), terse desk-style labels.
+//     red accent, ORACAUS = ok-green accent), terse desk-style labels.
 //
 // Three metrics:
 //   - snapshot lag: `current_tick − panel_snapshot_tick` (library FIXES)
@@ -55,7 +55,7 @@ const FLASH_RESTART_MS = 600;
 //   - Hysteresis range 3..10 is wider than the Scenario 0 envelope so
 //     the lag NUMBER doesn't flicker tone every 200 ms display flush.
 //
-// Pre-Phase-1 these were 2/1 — calibrated for gated's natural
+// Pre-Phase-1 these were 2/1 — calibrated for Oracaus's natural
 // 1–3 tick variation under the OLD (clamping) lag formula. With the
 // honest formula the naive number spans 1–9 at Scenario 0; the old
 // thresholds caused 1 Hz tone-flicker. See DEMO_METRIC_FIX_PLAN.md.
@@ -64,6 +64,7 @@ const LAG_OK_RETURN_TICKS = 3;
 
 export type PanelProps = {
   readonly title: string;
+  readonly subtitle?: string;
   readonly data: DemoComputeOutput | undefined;
   readonly latestInputs: FitSnapshot | undefined;
   readonly isComputing: boolean;
@@ -72,7 +73,7 @@ export type PanelProps = {
   readonly pendingCount?: number;
   /**
    * Monotonic counter that increments every time the user changes an
-   * intent input (gated panel only — naive doesn't use intent). A
+   * intent input (Oracaus panel only — naive doesn't use intent). A
    * change triggers a brief "restart" flash on the fitting chip,
    * because `isComputing` stays continuously true across the
    * substrate's cancel-and-restart and provides no natural transition
@@ -152,7 +153,7 @@ function PanelImpl(props: PanelProps) {
   // `stickyCoherent` tracks visual-mismark hysteresis. Drives the
   // mismark metric's tone AND the header chip on both modes. The chip
   // annotates the visible failure (dots-vs-curve disagreement above
-  // noise floor) directly. On GATED, mismark equals the LM residual
+  // noise floor) directly. On ORACAUS, mismark equals the LM residual
   // against the commit's own snapshot — always near zero in normal
   // operation, so the chip surfaces fitter-health regressions if the
   // worker ever returns garbage. On NAIVE, mismark reflects the
@@ -239,6 +240,11 @@ function PanelImpl(props: PanelProps) {
           className={`font-mono text-sm font-semibold uppercase tracking-widest ${accentClass}`}
         >
           {props.title}
+          {props.subtitle !== undefined && (
+            <span className="ml-3 font-normal text-fg-muted">
+              {props.subtitle}
+            </span>
+          )}
         </h3>
         <div className="flex shrink-0 items-center gap-2">
           <span

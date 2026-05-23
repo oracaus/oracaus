@@ -48,7 +48,7 @@ const NEAREST_QUOTE_K_TOLERANCE = 0.02;
 
 // Cross-view cursor stroke colour. Mirrors the panel accent palette
 // (`styles.css` — `--color-accent-stale` red for NAIVE, `--color-accent-ok`
-// green for GATED) so the cursor line reinforces panel identity at a
+// green for ORACAUS) so the cursor line reinforces panel identity at a
 // glance — red on the torn panel, green on the coherent one. The
 // constants are inlined to keep the SVG attribute path free of CSS-var
 // lookups (the stroke is set per-render).
@@ -67,7 +67,7 @@ export type SmileProps = {
   /**
    * Controlled hover state — k-coordinate currently under the cross-view
    * hover (Smile pointer-move or OptionChainTable row hover). `null` means
-   * no hover. Owned by `App.tsx` so all three views (NAIVE smile, GATED
+   * no hover. Owned by `App.tsx` so all three views (NAIVE smile, ORACAUS
    * smile, option chain) reflect the same hovered k.
    */
   readonly hoveredK: number | null;
@@ -79,7 +79,7 @@ export type SmileProps = {
   readonly onHoverChange: (k: number | null) => void;
   /**
    * Cursor-line accent tone. `"stale"` paints the dashed cursor in the
-   * NAIVE-panel red; `"ok"` paints it in the GATED-panel green. Same
+   * NAIVE-panel red; `"ok"` paints it in the ORACAUS-panel green. Same
    * line, same dashing, same opacity — only the stroke colour changes,
    * so a glance at the cursor immediately says which panel it's on.
    */
@@ -163,7 +163,7 @@ function SmileImpl(props: SmileProps) {
   // Overlay content — derived at render time from (hoveredK, params,
   // quotes, T). All five lines come from the same logical snapshot as
   // the panel's dots and curve (Panel selects `quotes` per mode — NAIVE
-  // reads `latestInputs.slice`, GATED reads `data.sourceSlice` — so the
+  // reads `latestInputs.slice`, ORACAUS reads `data.sourceSlice` — so the
   // overlay's "IV obs" composes correctly with whichever slice the panel
   // is rendering).
   const overlay = useMemo(
@@ -174,7 +174,7 @@ function SmileImpl(props: SmileProps) {
     [props.hoveredK, fittedParams, quotes, timeToExpiry],
   );
 
-  // Unique clipPath id per Smile instance — NAIVE and GATED both render
+  // Unique clipPath id per Smile instance — NAIVE and ORACAUS both render
   // their own Smile, so a shared static id would collide. `useId()`
   // returns a stable, document-unique string; colons (which `useId`
   // includes) are valid in modern SVG `url(#…)` references but we
@@ -351,7 +351,7 @@ function SmileImpl(props: SmileProps) {
                 both smiles (and corresponds to the highlighted row in
                 the option chain) regardless of which view initiated the
                 hover. Stroke colour reinforces panel identity: red on
-                NAIVE, green on GATED — same as the chip rail and
+                NAIVE, green on ORACAUS — same as the chip rail and
                 panel-header accents. */}
             {props.hoveredK !== null &&
               props.hoveredK >= xRange0 &&
@@ -378,7 +378,7 @@ function SmileImpl(props: SmileProps) {
                 Rendered before the fit curve so the curve sits ON TOP of
                 the dots — at 200 strikes the dots form a near-continuous
                 mass and would otherwise hide the fit entirely (most
-                visible in GATED where the fit hugs the dots). With the
+                visible in ORACAUS where the fit hugs the dots). With the
                 fit on top, viewers see a thin blue ribbon tracing through
                 the dot field, and the dots remain visible around the
                 ribbon. When NAIVE under shock tears, dots and fit
@@ -433,7 +433,7 @@ function SmileImpl(props: SmileProps) {
           overlay on the left, so the two HTML siblings sit
           symmetrically. Same translucent backdrop-blur treatment as
           the overlay for visual register match. The `torn` swatch
-          surfaces only on the NAIVE panel — GATED never produces torn
+          surfaces only on the NAIVE panel — ORACAUS never produces torn
           dots by the substrate's invariant, so the entry would
           mislead the viewer about possible states there. */}
       <SmileLegend

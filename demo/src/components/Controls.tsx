@@ -67,7 +67,15 @@ const REPAIR_MODES = ["on", "off"] as const;
 // underlying ladder (built by `buildExpiryLadder` in feed.ts) is
 // exponentially spaced from 1 week to 3 years; the panel projects
 // whichever maturity is closest to the selected tenor.
-const DISPLAY_MATURITIES: ReadonlyArray<{ years: number; label: string }> = [
+//
+// Exported because App.tsx derives the panel-title expiry label from
+// `displayMaturityYears` and needs the same `(years → label)` mapping
+// the buttons here render. Single source of truth for desk-standard
+// tenor names across the demo.
+export const DISPLAY_MATURITIES: ReadonlyArray<{
+  years: number;
+  label: string;
+}> = [
   { years: 0.083, label: "1M" },
   { years: 0.25, label: "3M" },
   { years: 0.5, label: "6M" },
@@ -228,7 +236,7 @@ function ControlsImpl(props: ControlsProps) {
       </div>
 
       {/* Display maturity — which slice both panels render. Shared
-          state so the NAIVE-vs-GATED comparison is on the same tenor.
+          state so the NAIVE-vs-ORACAUS comparison is on the same tenor.
           The panel projects to whichever ladder index is closest to
           the selected years. */}
       <div className="flex items-center gap-2">
@@ -277,10 +285,10 @@ function ControlsImpl(props: ControlsProps) {
             props.shocking ? "vol shock active (10s)" : "trigger vol shock"
           }
           aria-label="trigger volatility shock"
-          className={`focus-ring focus-visible:outline-accent-warn relative flex h-7 w-7 items-center justify-center overflow-hidden rounded border ${
+          className={`focus-ring focus-visible:outline-accent-warn relative flex h-9 w-9 items-center justify-center overflow-hidden rounded border ${
             props.shocking
               ? "cursor-not-allowed border-accent-warn text-accent-warn"
-              : "border-border bg-bg text-fg-muted hover:border-accent-warn hover:text-accent-warn"
+              : "border-accent-warn/60 bg-accent-warn/4 text-accent-warn hover:border-accent-warn hover:bg-accent-warn/8"
           }`}
         >
           {/* Draining time-remaining fill. Painted behind the icon via

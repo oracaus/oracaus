@@ -1,4 +1,4 @@
-// GATED panel's fit-state hook. Wraps `useCoherentDerivation` and surfaces
+// ORACAUS panel's fit-state hook. Wraps `useCoherentDerivation` and surfaces
 // the worker's bundled surface output so the panel can render
 // `(dots, curve)` from a guaranteed-coherent snapshot pair — at the
 // surface level, holding across all maturities simultaneously.
@@ -9,7 +9,7 @@
 //   NAIVE: posts on every tick, tracks `latestInputs` and `data` in
 //          independent React-state slots → renderer pairs LATEST inputs
 //          with WHATEVER fit landed → tearing.
-//   GATED (this hook): the library's strategy holds visible state during
+//   ORACAUS (this hook): the library's strategy holds visible state during
 //          in-flight compute and commits `(input, output)` atomically →
 //          renderer always sees a same-snapshot pair → coherent.
 //

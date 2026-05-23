@@ -18,7 +18,7 @@
 // Emit policy: per-slice fits emitted unconditionally with the
 // `surfaceArbStatus` flag. The panel layer decides what to render —
 // `surfaceArbStatus` is for instrumentation, not for suppression. Both
-// the naive and gated panels will render arb-violating output if repair
+// the naive and Oracaus panels will render arb-violating output if repair
 // fails (the substrate's contract is coherence, not arb-correctness).
 //
 // Error semantics — layered with the library:

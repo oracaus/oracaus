@@ -55,26 +55,26 @@ const SCENARIO_ENTRY_VARIANTS: Record<Scenario, readonly string[]> = {
   "S1-canonical": [
     // angle: load named + observation pointer (lag is machine-dependent)
     "Production-realistic surface. Watch where naive's lag lands.",
-    // angle: gated's outcome named
-    "Gated stays coherent — dots and curve from one snapshot.",
+    // angle: Oracaus's outcome named
+    "Oracaus stays coherent — dots and curve from one snapshot.",
     // angle: the thesis distilled
     "Same fitter, different commit. Composition timing does the rest.",
   ],
   "S2-intent-toggle": [
-    // angle: action — pointer to gated, where the cancel-restart shows
-    "Intent input toggled. Gated cancels in-flight and restarts.",
-    // angle: contrast — gated cancels, naive's tick stream carries on
-    "Intent change cancels gated's in-flight; naive's queue carries on.",
+    // angle: action — pointer to Oracaus, where the cancel-restart shows
+    "Intent input toggled. Oracaus cancels in-flight and restarts.",
+    // angle: contrast — Oracaus cancels, naive's tick stream carries on
+    "Intent change cancels Oracaus's in-flight; naive's queue carries on.",
     // angle: visible artefact — chip flash
-    "Watch gated's fitting chip flash on intent change.",
+    "Watch Oracaus's fitting chip flash on intent change.",
   ],
   "S3-heavier": [
     // angle: regime + observation pointer (compute claim is machine-dependent)
     "Heavier surface. Watch how naive's lag responds to the load.",
     // angle: mechanism — conditional, holds when the failure shows
     "When naive lags: fits tagged to older snapshots than the dots.",
-    // angle: gated's outcome — hedged (commit cadence depends on machine)
-    "Gated's commit cadence may drop, but each commit stays coherent.",
+    // angle: Oracaus's outcome — hedged (commit cadence depends on machine)
+    "Oracaus's commit cadence may drop, but each commit stays coherent.",
   ],
   "S4-shock": [
     // angle: speed dimension + observation pointer (specific tick lag is machine-dependent)
@@ -86,11 +86,11 @@ const SCENARIO_ENTRY_VARIANTS: Record<Scenario, readonly string[]> = {
   ],
   "S5-pathological": [
     // angle: the pile-up — queue saturated
-    "Pathological. Naive's queue saturated, new posts dropping. Gated one fit behind.",
-    // angle: gated's consistency — never wrong shape
-    "Gated lands one fit behind truth, but never composes the wrong shape.",
+    "Pathological. Naive's queue saturated, new posts dropping. Oracaus one fit behind.",
+    // angle: Oracaus's consistency — never wrong shape
+    "Oracaus lands one fit behind truth, but never composes the wrong shape.",
     // angle: the limit case — all knobs at max
-    "Maximum pressure. Naive overwhelmed; gated commits less often but matches each pair.",
+    "Maximum pressure. Naive overwhelmed; Oracaus commits less often but matches each pair.",
   ],
 };
 
@@ -147,20 +147,20 @@ const EVENT_VARIANTS: Record<CommentaryEvent["type"], readonly string[]> = {
     "Repair gave up. Noise-induced violations beyond what the repair pass can clear.",
   ],
   IntentToggle: [
-    // angle: action — gated cancels and restarts
-    "Repair-mode toggled. Gated cancels in-flight, restarts against the new value.",
-    // angle: contrast — gated cancel-restarts, naive's queue carries on
-    "Intent input changed. Gated runs cancel-and-restart; naive's queue carries on.",
+    // angle: action — Oracaus cancels and restarts
+    "Repair-mode toggled. Oracaus cancels in-flight, restarts against the new value.",
+    // angle: contrast — Oracaus cancel-restarts, naive's queue carries on
+    "Intent input changed. Oracaus runs cancel-and-restart; naive's queue carries on.",
     // angle: visual — what to watch
-    "Watch gated's fitting chip flash. Cancel-restart on intent change.",
+    "Watch Oracaus's fitting chip flash. Cancel-restart on intent change.",
   ],
   ControlChanged: [
     // angle: temporal — both panels apply on next tick (explicit "both")
     "Setting changed. Both panels pick it up next tick.",
-    // angle: semantic — gated absorbed not cancelled
-    "Streaming change. Gated absorbs without cancel.",
-    // angle: contrast with intent — gated keeps the in-flight running
-    "Value changed. Gated keeps the in-flight running.",
+    // angle: semantic — Oracaus absorbed not cancelled
+    "Streaming change. Oracaus absorbs without cancel.",
+    // angle: contrast with intent — Oracaus keeps the in-flight running
+    "Value changed. Oracaus keeps the in-flight running.",
   ],
 };
 
@@ -259,7 +259,7 @@ export const METRIC_TEMPLATES: Readonly<Record<MetricKey, string>> = {
   // "Structural skew" — generic across both panel modes. NAIVE's lag
   // is `abs(latestInputs - data)` (both directions matter — data can
   // be either ahead of or behind the input view depending on load
-  // regime); GATED's is `max(0, currentTickIndex - data)` (staleness
+  // regime); Oracaus's is `max(0, currentTickIndex - data)` (staleness
   // of the coherent snapshot). "Behind real-time" was the pre-fix
   // framing and is wrong for NAIVE at light load. See
   // `demo/src/metrics.ts` for the per-mode formula.
@@ -283,7 +283,7 @@ export const METRIC_TEMPLATES: Readonly<Record<MetricKey, string>> = {
 // reach it. Verified by a scheduler test in `scheduler.test.ts`.
 export const CLOSING_PHRASE: PhraseSpec = {
   id: "closing-v1",
-  text: "Same compute. Gated lands a coherent pair, never Frankenstein.",
+  text: "Same compute. Oracaus lands a coherent pair, never Frankenstein.",
   tier: 3,
   gapAfterMs: 0,
 };
@@ -317,7 +317,7 @@ const REGION_INSIGHT_VARIANTS: Record<RegionId, readonly string[]> = {
     // angle: when the failure mode emerges — ties toolbar settings to compute/interval
     "These settings determine when the failure mode emerges — compute outruns tick interval.", // 12
     // angle: substrate guarantee — invariant across settings
-    "Whatever the settings, gated commits coherent pairs; naive may not.", // 10
+    "Whatever the settings, Oracaus commits coherent pairs; naive may not.", // 10
   ],
   // §The four metrics — lag / mismark; §The fix — composition timing.
   "naive-panel": [
@@ -331,11 +331,11 @@ const REGION_INSIGHT_VARIANTS: Record<RegionId, readonly string[]> = {
   // §The four metrics — mismark; §Curves and dots; §The fix.
   "gated-panel": [
     // angle: mismark interpretation — LM-residual floor, not a fit-quality score
-    "Gated's mismark sits at the fitter's noise floor — not a fit-quality indicator.", // 13
+    "Oracaus's mismark sits at the fitter's noise floor — not a fit-quality indicator.", // 13
     // angle: structural guarantee — red dots can't exist by construction
-    "Gated never shows red dots — the curve always matches the dots' snapshot.", // 13
+    "Oracaus never shows red dots — the curve always matches the dots' snapshot.", // 13
     // angle: why — structural vs faster compute
-    "Gated's coherence is structural — guaranteed by the substrate, not by faster compute.", // 12
+    "Oracaus's coherence is structural — guaranteed by the substrate, not by faster compute.", // 12
   ],
   // §UI anatomy — Hero card; §Option chain — per-strike rows; §The fix.
   "chain-table": [
@@ -350,8 +350,8 @@ const REGION_INSIGHT_VARIANTS: Record<RegionId, readonly string[]> = {
   "mismark-sparkline": [
     // angle: tail vs average — what risk managers actually price
     "The tail names the worst frame; the average hides it.", // 10
-    // angle: gated's flatness — structural, not statistical
-    "Gated's trace stays flat — coherence is structural, not statistical.", // 10
+    // angle: Oracaus's flatness — structural, not statistical
+    "Oracaus's trace stays flat — coherence is structural, not statistical.", // 10
     // angle: naive's spike shape — episodic queue-drain dynamics
     "When naive spikes, that's its queue catching up — the failure isn't gradual.", // 13
   ],

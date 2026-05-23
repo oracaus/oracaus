@@ -1,20 +1,8 @@
 # @oracaus/coherent-derivation
 
-A React hook for substantive async derivations against streaming inputs. The kind where a 60ms vol-surface fit chases an option chain ticking at 100Hz, or a 200ms scenario revaluation runs alongside positions that move every 50ms. Without alignment, the rendered frame composes `data` computed against snapshot N alongside `streaming` inputs from N+k — a tuple no upstream snapshot ever held. The hook holds visible state during in-flight compute and commits `(input, output)` tagged to the same snapshot, so the rendered frame is always coherent.
+**What it does.** Heavy compute that can't fit in a render frame — a vol-surface fit, an ML inference pass, a scenario revaluation — runs async in a Web Worker to keep the main thread responsive. If streaming inputs mutate during the in-flight window, the rendered frame can compose output computed against one snapshot alongside live input values from a newer snapshot — a tuple that never existed upstream. This hook keeps `(input, output)` pairs coherent: visible state holds until in-flight compute completes, then commits both atomically. Screen advances at compute cadence — slightly delayed, never mismatched.
 
-**Live demo:** [demo.oracaus.dev](https://demo.oracaus.dev) — SVI vol-surface fits against a synthetic chain ticking at 50–500 Hz; naive vs. gated side-by-side; trigger the vol-shock burst to see the failure mode.
-
-**Quick reference** — [Install](#install) · [Minimal example](#minimal-example) · [Two input kinds](#two-input-kinds) · [High-rate streaming inputs](#high-rate-streaming-inputs) · [Custom workers](#custom-workers-for-non-trivial-compute) · [How this compares to ...](#how-this-compares-to) · [Performance](#performance) · [Limitations](#limitations) · [API](#api)
-
-ESM only · React 18+ peer · Chrome 80+ / Firefox 114+ / Safari 15+ · `<` 8 KB gz main + `<` 3 KB gz worker · Worker protocol semver-stable from v0.5.0
-
-## Install
-
-```bash
-npm install @oracaus/coherent-derivation
-```
-
-ESM only. Requires React 18 or newer.
+**Live demo:** [demo.oracaus.dev](https://demo.oracaus.dev) — the hero scenario is an SVI vol-surface fit against a synthetic option chain (50–500 ticks/sec), side-by-side panels showing the failure mode without the library and the substrate's atomic-commit fix; trigger the vol-shock burst to see the visible tearing. The underlying coherence problem is domain-agnostic; this happens to be a visceral example. The 70-expiry × 200-strike default is a deliberate stress-test scale — real markets are sparser (~5–10 expiries × 10–30 strikes); the surface-size selector dials down to realistic counts.
 
 ## Minimal example
 
@@ -34,6 +22,23 @@ function VolSurfacePanel({ chain }: { chain: OptionChain }) {
 ```
 
 The `compute` function runs in a Web Worker (the library inlines and spawns one). `data` is `undefined` until the first compute completes; after that it's atomically paired with the chain snapshot it was computed against — so rendering against the latest `data` never tears against newer `chain` ticks arriving from upstream.
+
+**Common questions:**
+
+- *Where does the streaming input come from?* Anywhere subscribe-shaped: WebSocket (wrapped), SSE, polling, your existing event bus. The library doesn't transport data — you bring the stream; the substrate aligns it at the React render-commit boundary.
+- *What's the trade-off?* Slightly delayed frames vs. mismatched frames. Coherence against slight delay, not coherence against nothing.
+
+**Quick reference** — [Install](#install) · [Two input kinds](#two-input-kinds) · [High-rate streaming inputs](#high-rate-streaming-inputs) · [Custom workers](#custom-workers-for-non-trivial-compute) · [How this compares to ...](#how-this-compares-to) · [Performance](#performance) · [Limitations](#limitations) · [API](#api)
+
+ESM only · React 18+ peer · Chrome 80+ / Firefox 114+ / Safari 15+ · `<` 8 KB gz main + `<` 3 KB gz worker · Worker protocol semver-stable from v0.5.0
+
+## Install
+
+```bash
+npm install @oracaus/coherent-derivation
+```
+
+ESM only. Requires React 18 or newer.
 
 ## Two input kinds
 
@@ -201,6 +206,14 @@ React's concurrent features address **main-thread interruption** — they let Re
 This library addresses a different problem: **alignment at render-commit between async compute and the inputs it was computed against**. The compute runs in a Web Worker (off the main thread entirely); the library ensures the worker's result composes coherently with the input snapshot that triggered it, regardless of what arrived during the in-flight window.
 
 If your compute fits the frame budget synchronously, `useDeferredValue` and `useTransition` are the right tools. If your compute is too heavy for the main thread and you've moved it to a Web Worker, the substrate is what addresses what async then exposes.
+
+### State containers (Redux / MobX / Zustand / Jotai / XState)
+
+State containers hold state — where session values live, how updates propagate to subscribers. The substrate aligns at the render-commit boundary when state becomes visible; orthogonal concerns. Wire your existing container into `useCoherentDerivation`'s `streaming` or `intent` slot — raw values for low-rate inputs (sliders, mode toggles), `Source<T>` for high-rate streams. The substrate commits the (input, output) pair coherently regardless of where the input came from.
+
+### Dep-graph systems (`useMemo` / Solid signals / MobX reactions / Jane Street's Incremental)
+
+Dep-graph systems orchestrate computation — what depends on what, when to recompute, how to propagate change. The substrate doesn't orchestrate; it observes outputs at commit. For multi-stage chains (factor decomposition → regime classifier → alert generator; ML inference pipelines), the consumer's dep-graph maintains snapshot identity through the chain, and the substrate observes the chain's tagged output and emits when it aligns. Topology declarations live in the consumer's dep-graph, not in the substrate.
 
 ### Stream libraries (RxJS / Most.js / Kefir)
 

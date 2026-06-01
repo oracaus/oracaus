@@ -1,10 +1,10 @@
 # Oracaus demo
 
-Companion demo for [`@oracaus/coherent-derivation`](https://www.npmjs.com/package/@oracaus/coherent-derivation) — naive-vs-gated panels side-by-side, same SVI fitter running in both, demonstrating what the library's atomic-commit alignment fixes vs what naive React-state composition can't.
+Companion demo for [`@oracaus/coherent-derivation`](https://www.npmjs.com/package/@oracaus/coherent-derivation) — NAIVE-vs-ORACAUS panels side-by-side, same SVI fitter running in both, demonstrating what the library's atomic-commit alignment fixes vs what naive React-state composition can't.
 
 **Live demo:** [demo.oracaus.dev](https://demo.oracaus.dev)
 
-Two panels. **NAIVE** — chain ticks sourced directly from the feed's throttled view; fit result lands independently from a worker — tears under streaming load: the rendered frame pairs the latest chain with whatever fit just landed, computed against an older chain. **GATED** — same worker, same fitter, same observed quotes; routed through `useCoherentDerivation` — commits `(input, output)` atomically and never tears. Trigger the vol-shock burst to see the contrast.
+Two panels. **NAIVE** — chain ticks sourced directly from the feed's throttled view; fit result lands independently from a worker — tears under streaming load: the rendered frame pairs the latest chain with whatever fit just landed, computed against an older chain. **ORACAUS** — same worker, same fitter, same observed quotes; routed through `useCoherentDerivation` — commits `(input, output)` atomically and never tears. Trigger the vol-shock burst to see the contrast.
 
 ## Run locally
 
@@ -28,7 +28,7 @@ Both panels run their own Web Worker (`src/worker/svi-worker.ts`) that bundles t
 
 The SVI fitter is ~1 300 lines across nine TS files with imports between them; it cannot cross the worker boundary as a stringified closure (`new Function(source)` has no module resolution). The custom-worker pattern is the canonical adopter recipe for non-trivial compute — see the [library README](../packages/coherent-derivation/README.md#custom-workers-for-non-trivial-compute) for the general pattern.
 
-The gated panel uses the library's `useEventSource` to bridge the feed-tick stream into the substrate in one call. Pushes arrive at the worker at the full upstream rate (50–500 Hz) without forcing a React re-render on every tick. The substrate's conflate-on-streaming policy engages because the substrate sees the raw stream:
+The gated panel uses the library's `useEventSource` to bridge the feed-tick stream into the library in one call. Pushes arrive at the worker at the full upstream rate (50–500 Hz) without forcing a React re-render on every tick. The library's conflate-on-streaming policy engages because the library sees the raw stream:
 
 ```ts
 import {
@@ -45,7 +45,6 @@ const workerFactory = () =>
 // a `Source<DemoInput>` and handles subscribe/cleanup lifecycle.
 const tickSource = useEventSource<DemoInput>(
   (push) => subscribeTick((tick) => push(toDemoInput(tick))),
-  PLACEHOLDER,
 );
 
 // Generics carry input/output types since `compute` is absent.
@@ -59,7 +58,7 @@ const { data, isComputing } = useCoherentDerivation<
 });
 ```
 
-The naive panel deliberately bypasses this: it posts on every tick to the same worker without the substrate's gating, so the React state for chain and fit land in independent slots — the architectural anti-pattern the demo demonstrates against.
+The naive panel deliberately bypasses this: it posts on every tick to the same worker without the library's gating, so the React state for chain and fit land in independent slots — the architectural anti-pattern the demo demonstrates against.
 
 ## Architecture
 
@@ -96,7 +95,7 @@ The PRNG is `mulberry32`; same seed → same sequence everywhere. Read the model
 
 A 50-strike single-slice fit clears in ~0.5 ms p99. At 50 ticks/sec (20 ms gap) the fit completes ~40× faster than the inter-tick interval — nothing tears.
 
-The default surface is **70 expiries × 200 strikes** (~75 ms p99 warm on M-series Mac), the middle of the Form 2 zone [50, 150] ms. At 50 Hz feed rate the fit time exceeds the inter-tick interval; NAIVE's curve and dots desynchronise visibly while GATED holds.
+The default surface is **50 expiries × 200 strikes** (~58 ms p99 warm on M-series Mac, measured via `npm run bench`), inside the Form 2 zone [50, 150] ms (at its lower edge) and matching SPX-style surfaces' typical 30–60 expiry count. At 50 Hz feed rate the fit time exceeds the inter-tick interval; NAIVE's curve and dots desynchronise visibly while ORACAUS holds.
 
 The expiry count is user-selectable via the top-bar `expiries` stepper from `{12, 30, 50, 70, 80}` — the production-meaningful axis for varying per-tick compute. Each step's tooltip shows estimated p99 compute so the viewer can predict their Form 2 zone position.
 

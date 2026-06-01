@@ -57,9 +57,8 @@ const TICK_RATES = [50, 100, 200, 500] as const;
 // [1w, 3y] the inter-step ratio (~2.75) is wider than the 1Y→2Y target
 // gap, so `1Y` and `2Y` both collapse onto the same ladder entry
 // (T≈1.085) and clicking between them is a visual no-op. 12 is the
-// smallest count where all five display tenors land on distinct
-// ladder entries. The "very small surface, no tearing" anchor point
-// is preserved (12 expiries ≈ 5 ms p99, well inside Form 1).
+// smallest count where all five display tenors land on distinct ladder
+// entries; higher counts step the failure-mode-escalation axis.
 const EXPIRY_COUNTS = [12, 30, 50, 70, 80] as const;
 const REPAIR_MODES = ["on", "off"] as const;
 
@@ -83,16 +82,17 @@ export const DISPLAY_MATURITIES: ReadonlyArray<{
   { years: 2.0, label: "2Y" },
 ];
 
-// Approximate per-tick compute time (p99 warm, M-series Mac, bench at
-// default 200 strikes per slice). Surfaced in the tooltip so the viewer
+// Per-tick compute (p99 warm at 200 strikes per slice on M-series Mac,
+// measured via `npm run bench`). Surfaced in the tooltip so the viewer
 // can predict where they sit relative to the [50, 150] ms Form 2 zone
-// without consulting the docs.
+// without consulting the docs. Shifts with hardware and the fit pipeline;
+// re-measure after any change.
 const ESTIMATED_COMPUTE_MS: Record<number, number> = {
-  12: 5,
-  30: 25,
-  50: 40,
-  70: 75,
-  80: 85,
+  12: 15,
+  30: 36,
+  50: 58,
+  70: 82,
+  80: 92,
 };
 
 // Memoised. App.tsx re-renders at the feed tick rate (50–500 Hz on the

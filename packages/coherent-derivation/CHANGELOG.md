@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [0.5.0]
+## [0.5.0] - 2026-06-01
 
 Initial release.
 
@@ -17,7 +17,7 @@ Initial release.
   - `streaming` — changes absorb (in-flight completes against its tagged snapshot; next compute kicks off against the latest streaming value at completion).
   - `intent` — changes cancel-and-restart in-flight against the new pair.
   - Mixed UIs declaring both are first-class; the substrate dispatches per input kind automatically.
-- Two policy-agnostic guarantees uphold the substrate's invariant (*every emitted frame composes `(input, output)` from the same snapshot*): atomic commit at render (microtask-batched single-transition emit) and identity-based composition (snapshot-ID tagging verified before emit).
+- Two policy-agnostic guarantees uphold the substrate's invariant (*every emitted frame composes `(input, output)` from the same snapshot*): atomic commit at render (single-object `StrategyState` swap through `useSyncExternalStore` — `data` and `dataSnapshotId` swap as one reference) and identity-based composition (snapshot-ID tagging verified before emit).
 
 ### Input shape
 
@@ -35,6 +35,6 @@ Initial release.
 
 ### Distribution
 
-- Library bundle <8 KB gz main + <3 KB gz worker (inlined; no separate worker file ships).
+- Library bundle ~3 KB gz total (single shipped file; worker source inlined as a string for Blob-URL spawning). Test budgets enforce <8 KB gz main + <3 KB gz worker source pre-inlining.
 - `sideEffects: false` declared — adopter bundlers tree-shake unused exports.
 - ESM only; React 18+ peer dependency.

@@ -67,10 +67,11 @@ function makeSviWorker(): Worker {
   });
 }
 
-// nExpiriesFitted = 70 puts the per-tick refit at 75 ms p99 against 200
-// strikes — middle of [50, 150] ms Form 2 zone. Strikes-per-slice is
+// 50 × 200 lands at ~58 ms p99 warm on M-series Mac (`npm run bench`) —
+// inside the [50, 150] ms Form 2 zone (at its lower edge), matching
+// SPX-style surfaces' typical 30–60 expiry count. Strikes-per-slice is
 // constant; the configurable axis is the expiry count (Controls selector).
-const DEFAULT_N_EXPIRIES_FITTED = 70;
+const DEFAULT_N_EXPIRIES_FITTED = 50;
 const N_STRIKES_PER_SLICE = 200;
 
 // Default displayed maturity — 1Y, the standard SPX "1Y vol" reference
@@ -634,17 +635,19 @@ export function App() {
             SVI vol-surface render alignment in React
           </span>
         </div>
-        {/* External-link cluster — source → install → author.
+        {/* External-link cluster — source → install → why this exists.
             GitHub (technical click-through: "show me the code"), npm
             (install click-through: "give me the library"), LinkedIn
-            (author click-through: "who built this"). All styled as
-            utility icons — matched dimensions, identical hover
-            treatment. The npm slot is a disabled placeholder until
-            v0.5.0 publishes — replace the span with an `<a>` tag to
-            https://www.npmjs.com/package/@oracaus/coherent-derivation
-            when live. The visceral click-through ("show me it
-            working") is the live demo itself plus the in-app
-            commentary, not a separate video. */}
+            (architectural click-through: "why does this exist" —
+            points at the mini-series capstone article so an
+            architecturally-curious demo visitor lands on the
+            substantive content first; the author's profile remains
+            reachable via the article's byline). All styled as utility
+            icons — matched dimensions, identical hover treatment.
+            `trackEvent` target stays as `"linkedin"` for analytics
+            continuity even though the destination URL is the capstone
+            article — historical data isn't fragmented by the
+            label-change. */}
         <div className="flex items-center gap-1">
           <a
             href="https://github.com/oracaus/oracaus"
@@ -657,20 +660,23 @@ export function App() {
           >
             <GithubIcon />
           </a>
-          <span
-            role="img"
-            title="@oracaus/coherent-derivation — publishing soon (v0.5.0)"
-            aria-label="npm package not yet published"
-            className="flex h-7 w-7 cursor-default items-center justify-center rounded bg-bg text-fg-muted/40"
-          >
-            <NpmIcon />
-          </span>
           <a
-            href="https://www.linkedin.com/in/przemyslawkalka/?locale=en-US"
+            href="https://www.npmjs.com/package/@oracaus/coherent-derivation"
             target="_blank"
             rel="noreferrer"
-            title="Przemyslaw Kalka on LinkedIn"
-            aria-label="open Przemyslaw Kalka's LinkedIn profile"
+            title="@oracaus/coherent-derivation on npm"
+            aria-label="open @oracaus/coherent-derivation on npm"
+            onClick={() => trackEvent("link-clicked", { target: "npm" })}
+            className="focus-ring flex h-7 w-7 items-center justify-center rounded bg-bg text-fg-muted transition-colors duration-75 hover:text-fg"
+          >
+            <NpmIcon />
+          </a>
+          <a
+            href="https://www.linkedin.com/pulse/anatomy-substrate-substantive-screen-side-derivation-przemys%C5%82aw-ka%C5%82ka-iklae/"
+            target="_blank"
+            rel="noreferrer"
+            title="The Anatomy of the Substrate — mini-series capstone"
+            aria-label="open the architectural capstone article on LinkedIn"
             onClick={() => trackEvent("link-clicked", { target: "linkedin" })}
             className="focus-ring flex h-7 w-7 items-center justify-center rounded bg-bg text-fg-muted transition-colors duration-75 hover:text-fg"
           >
@@ -907,9 +913,9 @@ function ViewportNotice() {
           this demo wants ≥{MIN_VIEWPORT_WIDTH} × {MIN_VIEWPORT_HEIGHT}
         </p>
         <p className="text-sm text-fg-muted">
-          The naive-vs-gated comparison reads at a glance only when both panels
-          and the option chain are visible together. Resize the window or open
-          on a desktop / laptop display.
+          The naive-vs-Oracaus comparison reads at a glance only when both
+          panels and the option chain are visible together. Resize the window or
+          open on a desktop / laptop display.
         </p>
       </div>
     </div>

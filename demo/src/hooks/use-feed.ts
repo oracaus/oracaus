@@ -101,6 +101,26 @@ export function useFeed(options: UseFeedOptions): FeedControls {
   const nExpiriesFittedRef = useRef(options.nExpiriesFitted);
   nExpiriesFittedRef.current = options.nExpiriesFitted;
 
+  // Page visibility — short-circuit stepping when the tab is hidden.
+  // Browsers throttle background setInterval to ~1 Hz anyway, but one
+  // tick per second through two workers each fitting a 50×200 surface
+  // still burns ~120 ms of CPU per background second; full pause is the
+  // cleaner default. Ref so the tick callback short-circuits without
+  // re-creating its interval on every flip; initial value catches the
+  // tab-loaded-in-background case.
+  const isHiddenRef = useRef(
+    typeof document !== "undefined" && document.visibilityState === "hidden",
+  );
+  useEffect(() => {
+    const handleVisibility = () => {
+      isHiddenRef.current = document.visibilityState === "hidden";
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, []);
+
   // Reseed: replace the feed and reset coalescer state. Triggered by
   // explicit reseed actions (the AdvancedControls modal) and by changes
   // to `nStrikesPerSlice` — the latter affects noise-pool indexing
@@ -142,6 +162,7 @@ export function useFeed(options: UseFeedOptions): FeedControls {
   useEffect(() => {
     const intervalMs = 1000 / Math.max(1, tickRateHz);
     const id = setInterval(() => {
+      if (isHiddenRef.current) return;
       const f = feedRef.current;
       if (f === null) return;
       const next = f.step();

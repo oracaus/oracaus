@@ -83,15 +83,17 @@ const BUDGETS_MS = {
   s50: { p99: 60, max: 200 }, // bench p99 ~0.52 ms; widened for small-workload noise
   s200: { p99: 120, max: 400 }, // bench p99 ~1.85 ms
   surface: { p99: 750, max: 2500 }, // bench p99 ~2.81 ms (Phase 2: 50 × 6)
-  // Phase 3.5 70 × 200 default surface — fits + calendar-arb check.
-  // Authoritative bench measures ~75 ms p99 warm on M-series Mac. The
-  // GitHub Actions `ubuntu-latest` CI runner (2-core, shared) runs the
-  // same workload ~3–5× slower with single-fit outliers up to ~400 ms
-  // observed under runner-pool contention. Budget widened to ~10× the
-  // bench baseline so CI variance doesn't generate false flakes; still
-  // catches catastrophic regressions (10×+ floor slowdown). The
-  // authoritative perf signal is `demo/bench/svi.bench.ts`, not this
-  // gate.
+  // Phase 3.5 70 × 200 reference surface — fits + calendar-arb check.
+  // (50 × 200 is the runtime default since 2026-05-25; 70 × 200 remains
+  // the canonical perf-gate target.) Local bench p99 warm sits at ~82 ms
+  // on M-series Mac, within ~10 % of the original 2026-05-21 baseline
+  // (~75 ms). The GitHub Actions `ubuntu-latest` CI runner (2-core,
+  // shared) runs the same workload ~3–5× slower with single-fit outliers
+  // up to ~400 ms observed under runner-pool contention. The 750 ms
+  // budget is ~9× the current bench baseline, sized to absorb CI
+  // variance without false flakes; still catches catastrophic
+  // regressions. Authoritative perf signal is `demo/bench/svi.bench.ts`,
+  // not this gate.
   s70x200: { p99: 750, max: 2000 },
 } as const;
 

@@ -19,6 +19,26 @@
 // at ~40 ms — sub-Form-2 zone. 70 × 200 lands at ~75 ms p99 warm — middle of
 // the target band. Decision logged in ROADMAP §Phase 3.5 closure notes.
 //
+// **Update (2026-05-25):** default revised from 70 × 200 to **50 × 200**.
+// Rationale: production-realistic for SPX-style surfaces (typically 30–60
+// expiries). The 70 × 200 scenario remains a tested case; it is no longer
+// the default. Clean-run p99 warm (M-series Mac, `npm run bench`):
+//   12×200   ~15 ms
+//   30×200   ~36 ms
+//   50×200   ~58 ms (default)
+//   70×200   ~82 ms (reference) — within ~10 % of the original 2026-05-21
+//                                  baseline of ~75 ms recorded below
+//   80×200   ~92 ms
+// **Note on a transient measurement drift seen during this update.** An
+// initial round of re-measurement on 2026-05-25 showed every surface size
+// landing ~30–50 % higher than the original baseline (e.g. 70 × 200 at
+// ~125 ms instead of ~75 ms). The cause was a runaway VS Code Helper
+// process (AWS Toolkit CloudFormation language-server) pegged at ~200 %
+// CPU on this machine; killing it restored the bench to within normal
+// variance of the original baseline. The bench is CPU-bound and shares
+// cores / cache / thermal headroom with other foreground processes —
+// keep the machine quiet for representative measurements.
+//
 // Block 1.1 acceptance ranges (steady-state warm p99) and observed values:
 //   6 × 50    (baseline):                Phase 2 regime; sub-Form-2 zone — observed ~2 ms
 //   30 × 150  (intermediate):            [25, 80] ms — observed ~25 ms
@@ -131,8 +151,11 @@ function buildKGrid(nPoints: number): readonly number[] {
 }
 
 const SURFACE_6x50 = buildCalendarFreeSurface(6, 50, TRUTH);
+const SURFACE_12x200 = buildCalendarFreeSurface(12, 200, TRUTH);
 const SURFACE_30x150 = buildCalendarFreeSurface(30, 150, TRUTH);
+const SURFACE_30x200 = buildCalendarFreeSurface(30, 200, TRUTH);
 const SURFACE_50x150 = buildCalendarFreeSurface(50, 150, TRUTH);
+const SURFACE_50x200 = buildCalendarFreeSurface(50, 200, TRUTH);
 const SURFACE_70x200 = buildCalendarFreeSurface(70, 200, TRUTH);
 const SURFACE_80x200 = buildCalendarFreeSurface(80, 200, TRUTH);
 
@@ -226,7 +249,10 @@ captureColdStart("30×150", () => {
 captureColdStart("50×150", () => {
   fitSurfaceWithArbCheck(SURFACE_50x150);
 });
-captureColdStart("70×200 (default)", () => {
+captureColdStart("50×200 (default)", () => {
+  fitSurfaceWithArbCheck(SURFACE_50x200);
+});
+captureColdStart("70×200 (reference)", () => {
   fitSurfaceWithArbCheck(SURFACE_70x200);
 });
 captureColdStart("80×200 (stress)", () => {
@@ -260,15 +286,27 @@ describe("SVI surface fit + calendar-arb detection (Phase 3.5)", () => {
     fitSurfaceWithArbCheck(SURFACE_6x50);
   });
 
+  bench("12×200 (selector min)", () => {
+    fitSurfaceWithArbCheck(SURFACE_12x200);
+  });
+
   bench("30×150 (intermediate)", () => {
     fitSurfaceWithArbCheck(SURFACE_30x150);
+  });
+
+  bench("30×200 (selector step)", () => {
+    fitSurfaceWithArbCheck(SURFACE_30x200);
   });
 
   bench("50×150", () => {
     fitSurfaceWithArbCheck(SURFACE_50x150);
   });
 
-  bench("70×200 (default)", () => {
+  bench("50×200 (default)", () => {
+    fitSurfaceWithArbCheck(SURFACE_50x200);
+  });
+
+  bench("70×200 (reference)", () => {
     fitSurfaceWithArbCheck(SURFACE_70x200);
   });
 

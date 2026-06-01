@@ -1,65 +1,122 @@
 # Oracaus
 
-A React hook for heavy async compute against streaming inputs — guarantees every emitted frame composes `(input, output)` from the same snapshot. (Think: a 60 ms vol-surface fit running against an option chain ticking at 100 Hz, or a slider drag at 60 Hz triggering scenario revaluation against live positions.)
+A React hook that keeps your UI coherent when async compute can't finish before the next input arrives — pairs every emitted output with the exact input snapshot it was computed against, so the rendered frame never shows derived values that don't match the inputs they were computed against. (Think: an APM tool re-aggregating p99 over a filtered 60-second span buffer, or a ~58 ms vol-surface fit against an option chain ticking at 50 Hz.)
 
-**Live demo:** [demo.oracaus.dev](https://demo.oracaus.dev)
+**[Open the live demo at demo.oracaus.dev](https://demo.oracaus.dev)**
 
-<!-- TODO post-recording (PLAN.md §C.4): replace this paragraph with the YouTube thumbnail embed:
-[![Oracaus demo — 60–90s walkthrough](https://img.youtube.com/vi/VIDEO_ID/maxresdefault.jpg)](https://www.youtube.com/watch?v=VIDEO_ID) -->
+[![Oracaus demo walkthrough — click to watch on YouTube](https://img.youtube.com/vi/CH8vc6owIUI/maxresdefault.jpg)](https://www.youtube.com/watch?v=CH8vc6owIUI)
 
-_Recording walkthrough coming soon — open the [live demo](https://demo.oracaus.dev) in the meantime; the README's "Where to look" section orients further._
+▶ **[Watch the walkthrough on YouTube](https://www.youtube.com/watch?v=CH8vc6owIUI)**
 
-ESM only · React 18+ peer · Chrome 80+ / Firefox 114+ / Safari 15+ · `<` 8 KB gz main + `<` 3 KB gz worker · Worker protocol semver-stable from v0.5.0
+ESM only · React 18+ peer · Chrome 80+ / Firefox 114+ / Safari 15+ · ~3 KB gz (worker inlined) · Worker protocol semver-stable from v0.5.0
 
-## The problem
+v0.5.0 — API stable in shape, semver-stable worker protocol; v1.0.0 reserved for refinement after a feedback period. Architectural rationale: [the pivot article](https://www.linkedin.com/pulse/pivot-narrowing-scope-substantive-screen-side-derivation-ka%C5%82ka-bexuf/) and [the mini-series capstone](https://www.linkedin.com/pulse/anatomy-substrate-substantive-screen-side-derivation-przemys%C5%82aw-ka%C5%82ka-iklae/).
 
-When async derivation runs longer than the interval between input changes — vol-surface fits against an option chain, scenario revaluation against position ticks, factor decomposition against live market data — the result lands tagged to a snapshot the live input has already moved past. Naive composition then paints a frame where derived state was computed against inputs that have changed; what the user sees is a tuple of values that never coexisted upstream.
+> **The architectural choice.** Inputs split into two kinds: **streaming** changes absorb — market ticks, event streams, sensor feeds; in-flight completes against its tagged value. **Intent** changes cancel and restart — slider drags, mode toggles, parameter tweaks; supersede in-flight against the newest value. Mixed UIs declaring both are first-class. The rest is mechanism.
 
-`useCoherentDerivation` holds visible state during in-flight Web Worker compute, then emits the `(input, output)` pair tagged to the same snapshot. Inputs split into two named kinds — `streaming` (changes absorb; in-flight completes against its tagged snapshot) and `intent` (changes cancel-and-restart against the newest value). Mixed UIs declaring both are first-class.
+```text
+Without coherence:
+
+  Input @ snapshot N+3 ──────────────► render
+                                         ▲
+  compute(N) ──► Output @ N ─────────────┘
+
+  Render = (Input@N+3, Output@N)   ⚠ a tuple that never existed upstream
+
+
+With useCoherentDerivation:
+
+  compute(N) ──► (Input@N, Output@N) ──► render
+
+  Render = (Input@N, Output@N)     ✓ a real past state of the upstream
+```
 
 ## Quick example
 
-```tsx
-import { useCoherentDerivation } from "@oracaus/coherent-derivation";
+```bash
+npm install @oracaus/coherent-derivation
+```
 
-function VolSurfacePanel({ chain }: { chain: OptionChain }) {
+```tsx
+import { useCoherentDerivation, type Source } from "@oracaus/coherent-derivation";
+
+function ComputePanel({
+  inputStream,
+  smoothing,
+  mode,
+}: {
+  inputStream: Source<Input>;
+  smoothing: number;
+  mode: "fast" | "precise";
+}) {
   const { data, isComputing } = useCoherentDerivation({
-    streaming: { chain },
-    compute: async ({ streaming }, signal) =>
-      fitVolSurface(streaming.chain, signal),
+    streaming: inputStream,                    // changes absorb
+    intent: { smoothing, mode },               // changes cancel and restart
+    compute: async ({ streaming: input, intent }, signal) =>
+      runHeavyCompute(input, intent.smoothing, intent.mode, signal),
   });
 
   if (data === undefined) return <Spinner />;
-  return <Smile params={data} stale={isComputing} />;
+  return <ResultView data={data} stale={isComputing} />;
 }
 ```
 
-The sections below frame _why-care_ → _is-this-for-me_ → _what-does-it-cost_; the full API surface, custom-worker recipe, and detailed reference live in the [library README](./packages/coherent-derivation/README.md).
+**`Source<T>`** is the library's high-rate input shape — construct with `useEventSource(subscribe)` for subscribe-shaped feeds or `useCallbackSource()` for imperative-push flows; both exported. **Raw values** work for low-rate inputs (sliders, mode toggles, feeds already in React state) — pass directly into `streaming` or `intent`. **Multiple values in a slot** wrap as an object (`streaming: { chain, positions }`); for multiple high-rate Sources, aggregate into one composite Source — the `isSource` check is top-level, so a wrapping object is treated as raw. Full patterns: [Two input kinds](./packages/coherent-derivation/README.md#two-input-kinds) and [High-rate streaming](./packages/coherent-derivation/README.md#high-rate-streaming-inputs) in the library README.
+
+The default worker reconstructs `compute` via `compute.toString()`, so it must be self-contained — no closure over component state, no imports of runtime-loaded modules. For non-trivial compute, supply a [`workerFactory`](./packages/coherent-derivation/README.md#custom-workers-for-non-trivial-compute) with the compute statically embedded; the demo's `svi-worker.ts` is the reference recipe.
+
+Full API surface and reference: [library README](./packages/coherent-derivation/README.md).
+
+## The problem
+
+Most adopters discover this failure mode after building it: cross-panel disagreement under load, race conditions between async results and live inputs, values that look correct individually but disagree when displayed together. The shape that unit tests pass but composition fails. Naming the pattern is half the fix.
+
+The underlying mechanism: when async derivation takes longer than the interval between input changes, the result lands tagged to a snapshot the live input has already moved past. In everyday React terms: **stale derived values sitting next to fresh inputs**, **race conditions between independent state slots**, **out-of-order async responses** landing into a render where the input has already moved on. Naive composition then paints a frame where derived state was computed against inputs that have changed; what the user sees is a tuple of values that never coexisted upstream. The pattern shows up in ad-hoc client-side filtering over streaming telemetry, vol-surface fits against an option chain, ML scoring against live sensor inputs, and scenario revaluation against position ticks.
+
+**Concretely**: the same shape repeats across domains. An observability dashboard's p99 line shows 240 ms while the spans table next to it lists three recent 480 ms outliers. A vol-surface chart shows σ = 18% while the chain row beside it implies σ = 22% — the trader prices, hedges, and books against a state that never existed (operational risk, not a UI bug). Each composition was correct at its own moment; neither existed upstream as a single state.
+
+Trading UIs are the most demanding instance of this shape; the same failure surfaces wherever heavy client-side derivation runs against streaming canonical state.
+
+`useCoherentDerivation` holds visible state during in-flight Web Worker compute, then emits the `(input, output)` pair tagged to the same snapshot. Every committed frame is a real past state of the upstream, never a stitched composition of fresh inputs and outputs from older state.
+
+## What this owns
+
+**The library handles**: the worker boundary (spawn, terminate, lifecycle), async cancellation via `AbortSignal`, streaming-input conflation, snapshot-tagged `(input, output)` commits, render-commit alignment.
+
+**You bring**: the stream (WebSocket, SSE, polling, your bus — wrap into a `Source<T>`); compute orchestration above a single derivation (multi-stage chains belong in your dep-graph — Solid signals, MobX reactions, `useMemo`); a `workerFactory` if you need worker pooling (one worker per hook by default); SSR-friendly fallbacks if you need them (initial-state shape returned on the server; worker spawns on first client effect).
 
 ## When does this matter?
 
 The library is **a no-op when compute time stays inside the input interval** — the worker is idle between events, the queue can't accumulate, and naive composition would render coherently anyway. That's correct behaviour, not a bug; the library doesn't add latency to fast computes.
 
-It becomes load-bearing when **any** of these is true:
+It becomes load-bearing when async compute exceeds the inter-snapshot interval. Common patterns where this happens:
 
-| Condition                          | Realistic example                                               |
-| ---------------------------------- | --------------------------------------------------------------- |
-| Heavy compute per event (≥ 16 ms)  | Multi-slice vol-surface fit + Greeks + no-arb checks ≈ 30–50 ms |
-| Compound compute pipeline          | Chain → SVI → P&L → risk metrics chained, totalling 50–100 ms   |
-| Multi-instrument scatter-gather    | 100 instruments × 1 ms each = 100 ms per chain tick             |
-| Monte Carlo / scenario revaluation | 100 scenarios × pricing = 50 ms–1 s                             |
-| ML inference in the loop           | Even small models: 20–200 ms forward pass                       |
-| User-driven high-frequency input   | Slider drag at 60 Hz emits inputs every ~16 ms                  |
-| Slow client                        | 1 ms on M-series Mac → 50 ms on a budget Android — same code    |
+| Pattern                                          | Realistic example                                               |
+| ------------------------------------------------ | --------------------------------------------------------------- |
+| Heavy compute per event                          | Multi-slice vol-surface fit + Greeks + no-arb checks ≈ 30–50 ms against an option chain ticking 50–200/sec |
+| Multi-leg aggregate analytics over a streamed ladder | Per-leg book-aware metrics (margin contribution, vol-bucket exposure, correlation impact) aggregated against a streamed price ladder; ≈ 20–40 ms per refresh; vertical tearing along the streamed/derived split |
+| Mixed streaming + intent feeding heavy compute   | Streaming chain at 50 Hz + slider drag on expiry-count or scenario parameter; both feed a 30–100 ms compute; the architectural shape the two-input-kind dispatch was designed for |
+| Scenario revaluation against ticked positions    | 100 scenarios × per-scenario pricing = 50 ms–1 s against a portfolio ticking at ~50 ms; aggregate staleness against the visible positions |
+| Interactive GPU-accelerated Monte Carlo          | 100k-path P&L surface on consumer GPU at 30–200 ms per dispatch; slider-driven perturbation grid against streaming market data; the two-input-kind dispatch maps onto this directly |
+| Streaming-input ML inference                     | Anomaly scoring on a streaming sensor feed; classification over a sliding feature window; small models, 20–200 ms forward pass |
+| Interactive client-side filtering + aggregation  | Ad-hoc re-compute over a 60-second filtered span buffer (APM-class tool); 40–80 ms per refresh on heavy filter changes |
+| Slow client                                      | Same code; 1 ms on developer M-series Mac → 50 ms on user budget Android; crosses the inter-snapshot interval threshold only on the user's device |
 
-The [demo](https://demo.oracaus.dev) is the easiest way to feel this — its expiry-count selector dials compute time from ~5 ms (no-op regime) up to 75 ms p99 (where naive starts to visibly tear).
+The threshold isn't fixed at 16 ms — the React frame budget is single-digit ms in practice (browser + scheduler take their share of the 16 ms / 8 ms frame interval), and the library's domain is async compute past the **inter-snapshot interval** (≈ 20 ms at 50 Hz inputs; ≈ 10 ms at 100 Hz). The boundary is empirical and shifts with cadence, fan-out, and scale.
+
+The [demo](https://demo.oracaus.dev) is the easiest way to feel this. Two selectors: per-tick compute (~15 ms → ~92 ms p99 across 12 → 80 expiries) and inter-snapshot interval (20 ms → 2 ms across 50 → 500 Hz). Naive tears when compute exceeds interval — steady at defaults (~58 ms vs 20 ms), dramatic at the upper corner (~92 ms vs 2 ms).
 
 ## How it differs
 
 - **React concurrent (`useDeferredValue` / `useTransition` / `Suspense`)** addresses _main-thread interruption_ — yielding mid-render to higher-priority work. It operates at the React scheduler. This library addresses a different problem: _alignment at render-commit between async compute and the inputs it was computed against_. The two are complementary, not substitutes.
 - **Stream libraries (RxJS / Most.js / Kefir)** transport values; they don't cross worker boundaries, don't carry snapshot identity for cross-async-stage composition, and don't integrate with `useSyncExternalStore`-class React subscription correctness. They're a fine input layer feeding `streaming` / `intent`; they aren't the alignment-at-render-commit primitive.
+- **Throttle / debounce (coalesced inputs)** addresses the same failure mode with a different trade — gate inputs to a coarser cadence (typically 5–10 Hz), and most computes fit within the wider gating interval. Cost: freshness — the application runs compute against staler inputs by design. The library's value scales with the compute-to-inter-snapshot-interval ratio; coalesced architectures shrink that ratio but don't close it for computes that exceed the gating interval, and intent-input coherence persists either way.
 
 Full differentiation in the [library README's `How this compares to ...` section](./packages/coherent-derivation/README.md).
+
+## What's the cost?
+
+The library doesn't add latency to your compute — async work takes its own time regardless of whether the host paints during the in-flight window or holds. What changes is the visible commit cadence: frames update when compute completes rather than at upstream input rate. Naive composition preserves input freshness but not input/output coherence — it paints fresh inputs alongside output that was computed against older state, a tuple that never existed upstream. The library commits real `(input, output)` pairs from past states the upstream actually held.
 
 ## Headline performance
 
@@ -67,12 +124,14 @@ The library is dispatch + alignment plumbing; the wall-clock latency you care ab
 
 | Metric               | Value                                                          |
 | -------------------- | -------------------------------------------------------------- |
-| Bundle (gz)          | < 8 KB main + < 3 KB worker (inlined; no separate worker file) |
+| Bundle (gz)          | ~3 KB total (one file; worker source inlined for Blob-URL spawning, no separate worker file) |
 | Worker spawn         | ~1–2 ms once per hook instance                                 |
 | Per-compute overhead | structured-clone + bridge dispatch — < 1 ms for typical inputs |
 | Main-thread blocking | None — compute runs in a Web Worker                            |
 
 For high-frequency streaming inputs (50–500 ticks/sec demonstrated in the demo), input conflation is automatic — pending-task depth never exceeds one regardless of input rate.
+
+All numbers reproducible. Bench sources: [`packages/coherent-derivation/test/bundle-size.test.ts`](./packages/coherent-derivation/test/bundle-size.test.ts) (bundle), [`demo/bench/svi.bench.ts`](./demo/bench/svi.bench.ts) (SVI workload). CI-budget methodology in [`demo/test/svi-perf.test.ts`](./demo/test/svi-perf.test.ts). Run `npm run bench` from the repo root to reproduce on your hardware.
 
 ## Browser support + limitations
 
@@ -86,24 +145,26 @@ For high-frequency streaming inputs (50–500 ticks/sec demonstrated in the demo
 - **Inputs must be `structuredClone`-able** — class instances, functions, Maps with non-string keys, and similar non-cloneable values fail at runtime when posted to the worker.
 - **No cross-instance coherence** — two `useCoherentDerivation` calls maintain their own invariants independently. For multi-derivation coherence against one input snapshot, bundle into one `compute` that returns a multi-field result.
 
-## Migration cost
+## Adoption shape
 
-For an existing component that does heavy compute against streaming inputs:
+For a component that does heavy compute against streaming inputs — new or existing:
 
-- **Minimal change shape**: wrap the compute callback in `useCoherentDerivation({ streaming, compute })`, render against `data` + `isComputing`. That's the one-line adoption.
-- **Inputs to split** — if your existing code conflates "values that should restart compute" with "values that should absorb", you'll need to declare them in the two-slot `{ streaming, intent }` shape. Often this surfaces a clarification the existing code was already informally making.
-- **Worker boundary** — if your compute imports across modules / closes over runtime state, the default `new Function` reconstruction won't work; either inline the compute or supply a bundled `workerFactory`. Bundler config is one extra line for Vite (`?worker` import suffix).
+- **Two adoption paths**. Inline `compute` for self-contained functions (no module imports, no closures over component state) — the library reconstructs and runs it in its bundled worker. Custom `workerFactory` returning your own bundled Worker for substantive compute with module imports — **the production path for non-trivial work**; the demo's [`svi-worker.ts`](./demo/src/worker/svi-worker.ts) is the canonical recipe. The inline path is the right shape for prototypes and self-contained transforms; assume you'll move to `workerFactory` once your compute reaches across modules.
+- **Inputs to split** — if your existing code conflates "values that should restart compute" with "values that should absorb", you'll need to declare them in the two-slot `{ streaming, intent }` shape. Often this surfaces a distinction the existing code was already informally making.
+- **Bundler compatibility** — for the `workerFactory` path, the W3C-standard `new Worker(new URL(path, import.meta.url), { type: "module" })` pattern is supported natively by Vite, Webpack 5+, Rollup, Parcel 2+, and esbuild without bundler-specific configuration.
 - **Peer dependency**: React 18 or newer. ESM only.
 - **Worker protocol** is exported and **semver-stable from v0.5.0** — adopters with custom workers won't be forced into rewrites by patch / minor releases.
 
-## Where to look
+## Next steps
 
-| You want to ...                       | Look at                                                                                                                                                           |
-| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Install and use the library           | [Library README](./packages/coherent-derivation/README.md)                                                                                                        |
-| See it run                            | [Live demo](https://demo.oracaus.dev)                                                                                                                   |
-| Read the demo source                  | [`demo/`](./demo)                                                                                                                                                 |
-| Understand the architectural argument | [The pivot article](https://www.linkedin.com/pulse/pivot-narrowing-scope-substantive-screen-side-derivation-ka%C5%82ka-bexuf/) — mini-series capstone forthcoming |
+Ready to adopt? Pick where to go.
+
+| Next step                          | Where                                                                                                                                                             |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Install and start building         | `npm install @oracaus/coherent-derivation` → [library README](./packages/coherent-derivation/README.md) for the API + recipes                                     |
+| Watch it run                       | [Live demo at demo.oracaus.dev](https://demo.oracaus.dev)                                                                                                         |
+| Read the demo source               | [`demo/`](./demo) — including the custom-worker recipe at [`demo/src/worker/svi-worker.ts`](./demo/src/worker/svi-worker.ts)                                       |
+| Read the architectural argument    | [The pivot article](https://www.linkedin.com/pulse/pivot-narrowing-scope-substantive-screen-side-derivation-ka%C5%82ka-bexuf/) and [the mini-series capstone](https://www.linkedin.com/pulse/anatomy-substrate-substantive-screen-side-derivation-przemys%C5%82aw-ka%C5%82ka-iklae/) |
 
 ## Repository layout
 
@@ -113,7 +174,7 @@ An npm workspaces monorepo.
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/coherent-derivation/` | The public library. Hook + worker bootstrap + strategy logic. v0.5.0 publish target.                                                                                                                                  |
 | `packages/connection-layer/`    | Workspace-internal design reference (SharedWorker orchestrator, `BackpressureValve`, multi-tab patterns). Not on the publish path.                                                                                    |
-| `demo/`                         | The v0.5.0 demo. SVI vol-surface fitting under a streaming option chain, naive vs. gated side-by-side. The custom-worker recipe (`demo/src/worker/svi-worker.ts`) is the canonical reference for non-trivial compute. |
+| `demo/`                         | The v0.5.0 demo. SVI vol-surface fitting under a streaming option chain, NAIVE vs ORACAUS side-by-side. The custom-worker recipe (`demo/src/worker/svi-worker.ts`) is the canonical reference for non-trivial compute. |
 
 ## Develop
 
@@ -121,7 +182,7 @@ An npm workspaces monorepo.
 
 ## Author
 
-[Przemyslaw Kalka](https://www.linkedin.com/in/przemyslawkalka/?locale=en-US) — building real-time risk and trading interfaces across FX, Fixed Income, Derivatives and Commodities.
+[Przemyslaw Kalka](https://www.linkedin.com/in/przemyslawkalka/?locale=en-US) — building real-time risk and trading interfaces across FX, Fixed Income, Derivatives and Commodities, where heavy compute meets fast-moving data. This library distils a correctness problem from that work.
 
 ## License
 

@@ -188,16 +188,17 @@ interface CoherentDerivationBaseOptions<TStreaming, TIntent> {
  *     reconstructed via `new Function`). Self-contained computes only —
  *     module imports, runtime-loaded modules, and closures over React state
  *     are not supported through this path. `workerFactory` may also be
- *     supplied to override the worker construction (e.g. for non-Vite
- *     bundlers or to pre-instantiate for warm-start).
+ *     supplied to override the worker construction (e.g. to pre-instantiate
+ *     for warm-start or to choose a specific worker bundle).
  *   - **Bundled worker** — pass `workerFactory` returning a `Worker` that
- *     bundles the compute directly (Vite's `?worker` import or
- *     `new Worker(new URL(...), { type: "module" })`). The worker listens
- *     for `WorkerInbound` messages and dispatches to its own bundled
- *     compute; the hook's `compute` option is unnecessary because the
- *     function never crosses the worker boundary. Use this for substantive
- *     compute that imports modules (LM solvers, ML inference pipelines,
- *     domain-specific fitters).
+ *     bundles the compute directly, typically via the W3C-standard
+ *     `new Worker(new URL("./worker.ts", import.meta.url), { type: "module" })`
+ *     pattern (supported natively by Vite, Webpack 5+, Rollup, Parcel 2+,
+ *     and esbuild). The worker listens for `WorkerInbound` messages and
+ *     dispatches to its own bundled compute; the hook's `compute` option
+ *     is unnecessary because the function never crosses the worker
+ *     boundary. Use this for substantive compute that imports modules
+ *     (LM solvers, ML inference pipelines, domain-specific fitters).
  *
  * `TOutput` is supplied via the generic parameter regardless of which shape
  * is used — pass explicit generics on the hook call when omitting `compute`.

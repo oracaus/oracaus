@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Oracaus — compute-quantum render alignment for heavy local compute against streaming inputs in React. v0.5.0 is the first release under this direction; the pre-pivot v0.4.0 (a per-stream causal-coherence library for trading UIs) is preserved in git history.
 
-The architectural rationale for the v0.5.0 direction lives in the [pivot article](https://www.linkedin.com/pulse/pivot-narrowing-scope-substantive-screen-side-derivation-ka%C5%82ka-bexuf/).
+The architectural rationale for the v0.5.0 direction lives in the [pivot article](https://www.linkedin.com/pulse/pivot-narrowing-scope-substantive-screen-side-derivation-ka%C5%82ka-bexuf/); the formal substrate description (invariant, two input kinds, compositional positioning) lives in the [mini-series capstone](https://www.linkedin.com/pulse/anatomy-substrate-substantive-screen-side-derivation-przemys%C5%82aw-ka%C5%82ka-iklae/).
 
 ## Commands (run from repo root)
 
@@ -200,7 +200,7 @@ Demo-internal calibration engine in `demo/src/svi/`. Fitter is the demo's refere
 
 **Output-side no-arbitrage** (`no-arb.ts`). `butterflyCheck(params, kGrid)` evaluates Gatheral's `g(k)`. `calendarCheck(slices, kGrid)` verifies `w(k, T_{i+1}) ≥ w(k, T_i)` consecutively.
 
-**Performance** (M-series Mac, vitest bench): 10-strike fit p99 0.17 ms; 50-strike 0.52 ms; 200-strike 1.85 ms; full surface (50 × 6) 2.81 ms. CI gate (`demo/test/svi-perf.test.ts`) uses coarse budgets for CI variance; `demo/bench/svi.bench.ts` is the baseline.
+**Performance** (M-series Mac, `npm run bench`): 10-strike fit p99 ~0.23 ms; 50-strike ~0.44 ms; 200-strike ~1.5 ms; full surface (50 × 6) ~2.5 ms. CI gate (`demo/test/svi-perf.test.ts`) uses coarse budgets for CI variance; `demo/bench/svi.bench.ts` is the authoritative source.
 
 **scipy cross-validation.** `demo/tools/generate-scipy-reference.py` (pinned `scipy==1.13.0`) regenerates `demo/test/fixtures/scipy-reference.json`. CI does not run Python; reviewers re-run locally.
 
@@ -237,7 +237,7 @@ Every consumer downstream of `App.tsx` reads state through a `useThrottled` boun
 Three rates:
 
 - **Feed tick rate** (50–500 Hz, user-controllable): synthetic option-chain refit cadence.
-- **Worker compute rate** (~12 Hz at default 70 × 200 / 75 ms).
+- **Worker compute rate** (~17 Hz at default 50 × 200 / ~58 ms p99 warm on M-series Mac, measured via `npm run bench`).
 - **Display refresh** (5 Hz): matches trading-desk display-throttle cadence.
 
 `Panel`, `Smile`, `MismarkSparkline`, `OptionChainTable` are `React.memo`'d. SVG paths in `Smile` are `useMemo`'d on params+scales.
@@ -257,7 +257,7 @@ Vol-shock multiplier amplifies σ_spot and OU diffusion × 5 for a 10-second bur
 
 ### Surface dimensions + control surface
 
-Default: **70 expiries × 200 strikes per slice** — 75 ms p99 warm on M-series Mac, middle of the Form 2 zone [50, 150] ms. Expiry count user-selectable from `{12, 30, 50, 70, 80}`; each step's tooltip shows estimated p99 compute. (12 is the smallest count where all five display tenors land on distinct ladder entries.)
+Default: **50 expiries × 200 strikes per slice** — ~58 ms p99 warm on M-series Mac (measured via `npm run bench`), inside the [50, 150] ms Form 2 zone (at its lower edge) and matching SPX-style surfaces' typical 30–60 expiry count. Expiry count user-selectable from `{12, 30, 50, 70, 80}`; each step's tooltip shows the bench-derived p99 compute. (12 is the smallest count where all five display tenors land on distinct ladder entries.)
 
 Display-maturity selector (`{1M, 3M, 6M, 1Y, 2Y}`) is a top-bar global control — comparison demands both panels on the same tenor. Displayed slice index derived via `findClosestMaturityIdx(buildExpiryLadder(nExpiriesFitted), displayMaturityYears)` so the selection survives expiry-count changes. The label set is exported as `DISPLAY_MATURITIES` from `Controls.tsx` for shared use (panel subtitle, etc.).
 
@@ -271,7 +271,7 @@ Display-maturity selector (`{1M, 3M, 6M, 1Y, 2Y}`) is a top-bar global control �
 4. Soft-penalty calibration: floor weight `1000`, over-floor margin `1 × 10⁻⁷`, LM `maxIterations: 200` for floor-constrained fits.
 5. Failure modes on `RepairResult.failureReason`: `pre-existing-fit-failure` / `too-many-violations` / `refit-failure` / `residual-violations`.
 
-Empirical 70 × 200 distribution at σ_iv = 0.001 (5 seeds × 30 ticks): **69 % arb-free, 27 % repair-applied, 4.7 % repair-failed**.
+Empirical calendar-arb distribution at σ_iv = 0.001 (SPX-ATM-realistic) — measured at the prior 70 × 200 default (5 seeds × 30 ticks), not re-measured at the current 50 × 200: **~69 % arb-free, ~27 % repair-applied, ~4.7 % repair-failed**.
 
 ### Two-metric verification UI per panel
 

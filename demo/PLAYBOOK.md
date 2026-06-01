@@ -13,10 +13,11 @@ running the SAME fit, the curve you render and the dots you render can be
 from different snapshots — they desynchronise under streaming load. With
 it, they can't.
 
-Two panels stacked top (NAIVE) and bottom (GATED) demonstrate this. NAIVE
+Two panels stacked top (NAIVE) and bottom (ORACAUS) demonstrate this. NAIVE
 wires the worker the obvious way (post on every input, accept every
-result, render whatever's in state). GATED uses `useCoherentDerivation`.
-Same fit; different synchronisation.
+result, render whatever's in state). ORACAUS uses `useCoherentDerivation`.
+Same fit; different synchronisation. (Variable names, mode keys, and hook
+identifiers retain `gated*` — they name the mechanism, not the panel.)
 
 ## When does this library actually matter?
 
@@ -42,10 +43,13 @@ For a single-slice SVI fitter on a beefy machine at typical chain-update
 rates, the library is largely invisible. For real options-tech UIs doing
 surface fit + Greeks + scenarios + slider responsiveness, it's
 load-bearing. **The demo's expiry-count selector is the production-
-meaningful way to scale compute**: 12 expiries (the lightest available)
-fits in ~5 ms; 70 (the default) fits in ~75 ms p99; 80 pushes deeper into
-the Form 2 zone. Each step's tooltip shows the estimated p99 — no
-artificial busy-loops, no synthetic slowdown, just real surface scaling.
+meaningful way to scale compute** (bench p99 warm at 200 strikes per
+slice on M-series Mac, `npm run bench`): 12 expiries fits in ~15 ms;
+30 lands at ~36 ms; 50 (the default) at ~58 ms — inside the Form 2 zone
+(at its lower edge) and matching SPX-style surfaces' typical 30–60
+expiry count; 70 lands at ~82 ms; 80 at ~92 ms. Each step's tooltip
+shows the bench-derived p99 — no artificial busy-loops, no synthetic
+slowdown, just real surface scaling.
 
 ## Are the demo's tick rates realistic?
 
@@ -143,11 +147,11 @@ ceremony at the call site.
 ─────────────────────────────────────────────────────────────────────────────
  NAIVE                                  │  OPTION CHAIN — Σ|fit − obs|
  ┌─ smile chart ────────┐               │  ┌─ hero ───────────────────┐
- │ ─── solid blue       │               │  │  NAIVE 5.21%   GATED 0.18%│
- │   = fitted SVI curve │               │  │  ratio bar  naive = 28× gated
+ │ ─── solid blue       │               │  │  NAIVE 5.21%   ORACAUS 0.18%│
+ │   = fitted SVI curve │               │  │  ratio bar  naive = 28× Oracaus
  │ ⚪ white dots        │               │  └──────────────────────────┘
  │   = observed quotes  │               │  per-strike rows (200 strikes)
- │ 🔴 red dots          │               │   k        naive    gated
+ │ 🔴 red dots          │               │   k        naive    Oracaus
  │   = fit disagrees    │               │   −0.20  +0.42%   −0.01%
  │     with truth at    │               │   −0.15  +0.31%   +0.02%
  │     this strike      │               │   ...
@@ -165,9 +169,9 @@ ceremony at the call site.
    ▲ status chips: fitting / coherent / arb-status
    ▼ metric ribbon: lag / compute / mismark / queue
 ─────────────────────────────────────────────────────────────────────────────
- GATED                                  │
+ ORACAUS                                │
  ┌─ smile chart (same shape) ─────┐     │  MismarkSparkline (last 60s)
- │   (no red dots — by design)    │     │  ─── naive trace · ─── gated trace
+ │   (no red dots — by design)    │     │  ─── naive trace · ─── Oracaus trace
  │   dashed cursor (green = OK)   │     │
  │   overlay (coherent: miss ≈ 0) │     │
  └────────────────────────────────┘     │
@@ -180,7 +184,7 @@ ceremony at the call site.
 - **Red dots (NAIVE only)** — strikes where the panel's curve disagrees
   with the panel's true SVI params at that strike beyond the noise floor.
   The true params are carried internally per snapshot (`latestInputs.trueParams`
-  for NAIVE, `data.sourceTrueParams` for GATED) and used for the diagnostic;
+  for NAIVE, `data.sourceTrueParams` for ORACAUS) and used for the diagnostic;
   they're not drawn as a curve. Red dots only light up when the curve is from
   a different snapshot than the dots — i.e. the visible failure mode.
 
@@ -188,7 +192,7 @@ ceremony at the call site.
 
 Hover either smile (or any row in the option chain) and a dashed vertical
 cursor appears on **both** smile panels at the same `k` — red on the NAIVE
-panel, green on the GATED panel (matching the panel chip-rail accents).
+panel, green on the ORACAUS panel (matching the panel chip-rail accents).
 The matching chain row highlights. A five-line overlay pins to the
 top-left of each smile:
 
@@ -201,7 +205,7 @@ top-left of each smile:
 | `g(k)`   | Gatheral butterfly indicator — red when negative (arb violation)     |
 
 **Read for the failure mode at a point.** Under shock, hover at a strike
-that has moved. GATED's overlay sits at LM-residual scale (≤ 0.2%). NAIVE's
+that has moved. ORACAUS's overlay sits at LM-residual scale (≤ 0.2%). NAIVE's
 `miss` blows up — the `IV fit` is from the lagging fit (snapshot N−k); the
 `IV obs` is from the freshest quote (snapshot N). The visible (dots, curve)
 tear, expressed as one number at a chosen k.
@@ -217,8 +221,8 @@ together show all three at once.
 The chip rail in each panel header shows three chips, left to right:
 
 - **FITTING / IDLE / RESTART** — is there a pending compute? FITTING fires
-  when `pendingCount > 0` (NAIVE) or `isComputing` (GATED); RESTART flashes
-  on the GATED panel's chip when an intent input change cancels and restarts
+  when `pendingCount > 0` (NAIVE) or `isComputing` (ORACAUS); RESTART flashes
+  on the ORACAUS panel's chip when an intent input change cancels and restarts
   the in-flight compute (arb-repair toggle, expiry change) — briefly amber
   before reverting to FITTING / IDLE. IDLE in steady state.
 - **COHERENT / STALE** — **mismark-driven, same logic for both modes**.
@@ -227,8 +231,8 @@ The chip rail in each panel header shows three chips, left to right:
   units). The chip annotates the *visible* dots-vs-curve tear: when the
   chart looks clean, the chip says COHERENT; when red dots appear or
   the curve visibly diverges from the dots, the chip says STALE.
-  GATED stays COHERENT unless the fitter itself regresses (mismark on
-  gated is the LM residual against its own snapshot — near-zero in
+  ORACAUS stays COHERENT unless the fitter itself regresses (mismark on
+  ORACAUS is the LM residual against its own snapshot — near-zero in
   normal operation). NAIVE flips to STALE during the visible failure
   mode (heavy load, vol shock, or 2σ+ OU realisations at light load).
   The chip and the bottom-ribbon `mismark` metric move together;
@@ -255,10 +259,10 @@ diagnostic dials, not summary stats.
 
 | Metric    | What it measures                                                                                                                                                                                                | Library fixes?           |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| `lag`     | Per-mode tick gap. NAIVE: `abs(latestInputs − data)` — absolute structural skew between displayed dots and displayed curve. GATED: `max(0, currentTickIndex − data)` — staleness of the coherent snapshot.      | **YES**                  |
+| `lag`     | Per-mode tick gap. NAIVE: `abs(latestInputs − data)` — absolute structural skew between displayed dots and displayed curve. ORACAUS: `max(0, currentTickIndex − data)` — staleness of the coherent snapshot.    | **YES**                  |
 | `compute` | Wall-clock per surface fit in ms (worker-measured, includes calendar-arb repair pass). Tone-coded against Form 2 zone [50, 150] ms.                                                                             | Just instrumentation     |
 | `mismark` | `mean_k \|w(k, fit) − w(k, panel_truth)\|` — curve vs truth at rendered strikes. The visceral tearing measure. Drives the COHERENT/STALE chip directly.                                                         | **YES**                  |
-| `queue`   | Pending compute backlog (NAIVE only — gated conflates). Capped at 20 (`MAX_PENDING_QUEUE`); production naive systems drop or block.                                                                             | **YES** (gated has none) |
+| `queue`   | Pending compute backlog (NAIVE only — ORACAUS conflates). Capped at 20 (`MAX_PENDING_QUEUE`); production naive systems drop or block.                                                                           | **YES** (ORACAUS has none) |
 
 `mismark` and `lag` go red on naive when the failure mode fires.
 The two formulas use a `switch` + `assertNever(mode)` helper in
@@ -266,12 +270,12 @@ The two formulas use a `switch` + `assertNever(mode)` helper in
 commentary's event detector share a single source of truth — adding
 a future panel mode would type-error rather than silently fall
 through. `compute` sits in the [50, 150] ms green band at production
-scale (70 × 200) on M-series Macs — that's the documented Form 2
+scale (50 × 200) on M-series Macs — that's the documented Form 2
 zone (CLAUDE.md §The boundary heuristic). `queue` is naive-only.
 
 Top-of-chain hero card additionally shows `Σ|fit − obs|` per panel (the
 sum of |miss| over all 200 strikes) and a ratio bar — useful for the
-visceral "naive = Nx gated" headline.
+visceral "naive = Nx ORACAUS" headline.
 
 ---
 
@@ -297,7 +301,7 @@ tells the story for an audience.
 | Setting    | Value                                                      |
 | ---------- | ---------------------------------------------------------- |
 | Tick rate  | 50/s                                                       |
-| Expiries   | 12 (lightest available — ~5 ms surface)                    |
+| Expiries   | 12 (lightest available — ~15 ms p99 per bench)             |
 | Arb-repair | off (no repair pass)                                       |
 | Slice      | 1Y (default)                                               |
 | Vol shock  | off                                                        |
@@ -305,9 +309,10 @@ tells the story for an audience.
 **Expected:** the panels look identical to the eye at this scale, but
 the hero card and ribbon show the gap structurally:
 
-- `compute` reads single-digit ms (~5 ms), `queue` stays at 0 on naive
-  (fit completes well inside the 20 ms tick interval).
-- **GATED mismark sits at noise-floor / LM-residual scale (~5e-5).**
+- `compute` reads in the low-to-mid teens (bench p99 ~15 ms at 12 × 200);
+  at 50 Hz the 20 ms tick interval comfortably exceeds compute, so `queue`
+  on naive stays at 0 in steady state.
+- **ORACAUS mismark sits at noise-floor / LM-residual scale (~5e-5).**
   COHERENT chip, no red dots.
 - **NAIVE mismark mostly small (~1e-3, well below the 5e-3 STALE
   threshold), occasional spikes during 2σ+ realisations of the
@@ -322,18 +327,18 @@ the hero card and ribbon show the gap structurally:
 - **NAIVE chip COHERENT most of the time, occasional STALE during
   the mismark spikes.** Mismark-driven only; the chip annotates what
   the chart shows. No flicker when the chart looks clean.
-- **Hero card Σ|miss| shows ~15–25% gated vs ~100–300% naive —
+- **Hero card Σ|miss| shows ~15–25% ORACAUS vs ~100–300% naive —
   roughly 5–25× ratio** depending on the moment's OU realisation. Even
   at this lightest setting the structural gap is measurable.
 
-**Why the library is already working at this setting.** Even with
-compute < interval, the display throttle keeps the displayed input
-view 1–9 ticks behind real time while `setData` fires eagerly on
-worker completion. The naive panel renders `latestInputs` (slightly
-stale) paired with `data` (fresh) — they're from different ticks.
+**Why the library is already working at this setting.** Independent of
+how full the queue gets, the display throttle keeps the displayed input
+view 1–9 ticks behind real time while `setData` fires eagerly on worker
+completion. The naive panel renders `latestInputs` (slightly stale)
+paired with `data` (fresh) — they're from different ticks.
 Most of the time the OU drift across those ticks is small enough that
 mismark stays at the noise floor; occasionally the drift produces a
-visible all-red moment. Gated's commit carries its own `sourceSlice`
+visible all-red moment. ORACAUS's commit carries its own `sourceSlice`
 so the displayed pair is always from the same tick — mismark stays at
 LM residual regardless.
 
@@ -341,10 +346,10 @@ LM residual regardless.
 no shock. The panels look identical to the eye most of the time. But
 watch the lag chip on naive — it fluctuates 1–9 ticks. That's the
 structural skew the library prevents. The hero card has the numbers:
-naive sits at a few percent, gated at a fraction of a percent. Every
+naive sits at a few percent, ORACAUS at a fraction of a percent. Every
 few seconds an OU realisation pushes naive's mismark past the noise
 floor and the chart goes all-red for a moment — that's a snapshot
-where the input view and the fit happened to drift far apart. Gated
+where the input view and the fit happened to drift far apart. ORACAUS
 never shows that because its (input, output) pair always comes from
 the same tick. This is the quietest version of the failure mode, and
 even here it's measurable. The visceral version comes when you scale
@@ -357,7 +362,7 @@ the compute up."_
 | Setting    | Value                                                      |
 | ---------- | ---------------------------------------------------------- |
 | Tick rate  | 50/s                                                       |
-| Expiries   | 70 (default — 200 strikes × 70 expiries = production scale)|
+| Expiries   | 50 (default — 200 strikes × 50 expiries = SPX-realistic) |
 | Arb-repair | on (default — production-realistic pipeline)               |
 | Slice      | 1Y                                                         |
 | Vol shock  | off                                                        |
@@ -370,27 +375,30 @@ the compute up."_
   queue saturation + the 5 Hz throttle staleness)
 - `mismark` crosses 0.005 → STALE chip (mismark-driven; chart visibly
   tears)
-- `compute` reads ~75 ms (Form 2 zone)
+- `compute` reads in the [50, 150] ms Form 2 zone (bench p99 warm
+  for 50 × 200 is ~58 ms; the demo's runtime metric is read off
+  individual ticks and will fluctuate around it)
 - Many dots paint red on the smile under shock; even at quiescent
   steady-state several wing strikes light up
-- Hero card: NAIVE Σ|miss| 5×–30× gated
+- Hero card: NAIVE Σ|miss| 5×–30× ORACAUS
 
-Gated stays at:
+ORACAUS stays at:
 
 - `lag` ≤ 1 tick (compute time only; substrate's coherent snapshot
   vs feed's latest)
 - `mismark` at LM-residual / noise floor (~5e-5 — orders of magnitude
   below STALE threshold)
 - COHERENT, no queue, no red dots
-- Hero card: GATED holds at LM-residual scale
+- Hero card: ORACAUS holds at LM-residual scale
 
 **Narration:** _"This is the realistic case for a vol-surface UI: full
-surface (70 expiries × 200 strikes) refit including calendar-arb repair
-≈ 75 ms, chain ticks at 50 Hz. Compute is ~4× the tick interval. Naive's
+surface (50 expiries × 200 strikes) refit including calendar-arb repair
+lands at the lower edge of the Form 2 zone (~58 ms p99 per bench), chain
+ticks at 50 Hz. Compute is roughly 3× the tick interval. Naive's
 queue grows; the fits that land come from older and older inputs while
 the dots on the chart keep updating. Watch the lag column — naive at
 40–45 ticks (queue saturates at 20 + structural drift + throttle
-staleness), gated at 0. Same worker, same fit; only the
+staleness), ORACAUS at 0. Same worker, same fit; only the
 synchronisation strategy differs."_
 
 This is the canonical demo. The default settings on first page load.
@@ -402,20 +410,20 @@ This is the canonical demo. The default settings on first page load.
 | Setting    | Value                                                      |
 | ---------- | ---------------------------------------------------------- |
 | Tick rate  | 50/s                                                       |
-| Expiries   | 70                                                         |
+| Expiries   | 50 (default — same as Scenario 1)                          |
 | Arb-repair | toggle off → on → off (during demo)                        |
 | Slice      | 1Y                                                         |
 | Vol shock  | off                                                        |
 
 The arb-repair toggle is wired as an **intent input** to
-`useCoherentDerivation`. Changing it cancels any in-flight gated compute
-and restarts against the new mode. The naive panel has no cancel
+`useCoherentDerivation`. Changing it cancels any in-flight compute on the
+ORACAUS panel and restarts against the new mode. The naive panel has no cancel
 semantics — its in-flight completes against the old mode before
 subsequent ticks pick up the new mode.
 
 **Expected on toggle:**
 
-- **GATED:** the `fitting` chip briefly flips to `RESTART` (~75 ms)
+- **ORACAUS:** the `fitting` chip briefly flips to `RESTART` (~58 ms)
   as the cancel-and-restart fires, then reverts to `fitting`. The
   next emit shows the new repair-mode result.
 - **NAIVE:** the `fitting` chip stays continuously on (no cancel
@@ -432,8 +440,8 @@ subsequent ticks pick up the new mode.
 inputs (user toggles, slider drags, mode selectors). The library handles
 both. Streaming changes absorb — in-flight completes against its tagged
 snapshot. Intent changes cancel-and-restart — in-flight is aborted, a
-fresh compute starts against the newest mode. Watch the gated panel:
-toggling arb-repair fires the `fitting` chip instantly, gated commits
+fresh compute starts against the newest mode. Watch the ORACAUS panel:
+toggling arb-repair fires the `fitting` chip instantly, ORACAUS commits
 the new-mode result, no leakage from the old mode. Same panel, both
 input kinds, one mechanism."_
 
@@ -453,14 +461,16 @@ input kinds, one mechanism."_
 to-interval ratio. Naive falls badly behind:
 
 - `queue` saturates at 20 within a fraction of a second
-- `lag` grows to ~100 ticks (queue cap × ticks-per-completion)
+- `lag` grows large at 100 Hz × 80 expiries (compute > 9× the tick
+  interval; queue saturates fast; read the running metric for the
+  empirical lag value)
 - Multiple red dots; chip mostly STALE, flips to COHERENT
   occasionally when mismark happens to dip
-- `compute` reads ~50 ms steady-state (no-repair-iteration case);
-  spikes to 85+ ms when the repair pass iterates on
-  noise-induced calendar violations
+- `compute` reads in the [85, 100] ms range (bench p99 at 80 × 200
+  ~92 ms detection-only); spikes higher when the repair pass iterates
+  on noise-induced calendar violations
 
-Gated stays largely coherent but compute lag becomes visible at this
+ORACAUS stays largely coherent but compute lag becomes visible at this
 scale: `lag` can occasionally exceed 10 ticks (~100 ms behind feed)
 during the worst compute spikes. The substrate's atomic-commit guarantee
 holds — chip stays COHERENT, no red dots — but the displayed coherent
@@ -470,14 +480,13 @@ Switching the slice mid-scenario demonstrates the y-axis transition —
 the chart smoothly animates between tenor scales on the GPU compositor.
 
 **Narration:** _"As surface scale grows, compute extends. At 80 expiries
-× 200 strikes the surface fit takes about 50 ms steady-state, spiking
+× 200 strikes the surface fit takes about 92 ms (bench p99), spiking
 higher when repair iterates. With a 10 ms tick interval (100 Hz) naive's
-queue saturates at 20 within milliseconds and its lag climbs to about
-100 ticks behind real-time — the displayed dots are a full second ahead
-of the curve. Even gated shows visible lag at this scale — but it stays
-coherent: dots and curve always from the same snapshot, just one that
-lags real-time. The library's value isn't 'no lag' — it's 'lag without
-tearing'."_
+queue saturates at 20 within milliseconds; the displayed dots run ahead
+of the curve by a wide margin. Even ORACAUS shows visible lag at this
+scale — but it stays coherent: dots and curve always from the same
+snapshot, just one that lags real-time. The library's value isn't 'no
+lag' — it's 'lag without tearing'."_
 
 ---
 
@@ -486,7 +495,7 @@ tearing'."_
 | Setting    | Value                                                      |
 | ---------- | ---------------------------------------------------------- |
 | Tick rate  | 50/s                                                       |
-| Expiries   | 70                                                         |
+| Expiries   | 50 (default)                                               |
 | Arb-repair | on                                                         |
 | Slice      | 1Y                                                         |
 | Vol shock  | **TRIGGER** (the amber lightning button, then watch)       |
@@ -498,10 +507,10 @@ tearing'."_
 - Naive's solid curve trails behind — the gap between curve and dots
   opens visibly at moved strikes; clusters of red dots light up where
   the lagging fit disagrees with the current truth
-- Gated's solid curve tracks the dots one fit behind, no red dots,
+- ORACAUS's solid curve tracks the dots one fit behind, no red dots,
   chip stays COHERENT
-- `mismark` spikes on naive; gated unmoved at LM-residual scale
-- Hover at a moved strike: NAIVE overlay's `miss` blows up; GATED's
+- `mismark` spikes on naive; ORACAUS unmoved at LM-residual scale
+- Hover at a moved strike: NAIVE overlay's `miss` blows up; ORACAUS's
   overlay stays at LM-residual scale
 - Arb-status chip may flip to `repaired` (or occasionally `arb-viol`)
   on **both** panels — they run the same fitter against the same
@@ -511,7 +520,7 @@ tearing'."_
   fit produces.
 
 After the 10 s the shock ends, params mean-revert, both panels return
-to baseline — gated's `mismark` snaps back to LM-residual scale
+to baseline — ORACAUS's `mismark` snaps back to LM-residual scale
 immediately on the next emit; naive drains the lag-induced gap as the
 queue clears.
 
@@ -519,7 +528,7 @@ queue clears.
 markets move fast — earnings, news, vol regime change — your synthesis
 of streaming inputs has to keep up. Hover a strike that's moved: naive
 shows the fit from snapshot N−k and the observation from snapshot N
-side by side, the gap is numerical. Gated shows them coherent. Without
+side by side, the gap is numerical. ORACAUS shows them coherent. Without
 alignment, your trader sees a smile that's seconds out of date. With
 alignment, they see a smile that's at most one fit late, but always
 internally consistent."_
@@ -540,12 +549,12 @@ internally consistent."_
 `lag` grows to ~300 ticks (the naive panel shows a smile from
 several seconds before you triggered the shock).
 
-Gated stays COHERENT but its `lag` chip flickers 0–25 ticks at this
+ORACAUS stays COHERENT but its `lag` chip flickers 0–25 ticks at this
 setting — the substrate's atomic-commit guarantee still holds (dots
 and curve always from the same snapshot), but the worker can't keep up
 with 500 Hz ticks at 80 expiries, so the displayed coherent snapshot
 genuinely lags real-time by ~50–500 ms. **This is the demo's most
-important Scenario 5 lesson: at pathological scale, gated still
+important Scenario 5 lesson: at pathological scale, ORACAUS still
 doesn't tear, but it does become *visibly stale*.** Use it to make
 the contrast unmissable — and to surface the library's honest scope:
 "render-coherent" is not "real-time".
@@ -569,15 +578,17 @@ produces the exact same tick stream. The advanced-controls dialog also
 exposes the seed so you can fork without reloading.
 
 For the canonical published recording (60–90s, captions only): open with
-seed at default settings (70 expiries × 200 strikes, arb-repair on, 1Y
-slice, 50 Hz), let it run ~5 seconds (divergence visible at default
-scale), trigger vol shock, watch through the burst (10 s) — naive tears,
-gated holds — then briefly toggle arb-repair off then on to demonstrate
-intent-input cancel-and-restart (the gated panel's `fitting` chip flashes
-on each toggle). Cut to taste; aim for the visceral arc of
-stable → shocked → gated-holding-while-naive-tears → intent-toggle cameo
-→ recovery. This is the single recording that ships on every surface
-(root README hero, mini-series piece 4 article body, HN post footer-links).
+seed at default settings (50 expiries × 200 strikes, arb-repair on, 1Y
+slice, 50 Hz), let it run ~5 seconds for steady state, trigger vol shock,
+watch through the burst (10 s) — naive tears, ORACAUS holds — then briefly
+toggle arb-repair off then on to demonstrate intent-input cancel-and-restart
+(the ORACAUS panel's `fitting` chip flashes RESTART on each toggle). The
+visceral arc: stable → shocked → ORACAUS-holding-while-naive-tears →
+intent-toggle cameo → recovery. This single recording ships on every
+surface (root README hero, mini-series piece 4 article body, HN post
+footer-links, folder 16's standalone LinkedIn drop). Toggle the in-demo
+commentary OFF before recording so the toast stack doesn't compete with
+the recording's own captions.
 
 ---
 
@@ -597,16 +608,17 @@ panel-pointing with whatever your audience is looking at.
 > The only difference is how each panel SYNCHRONISES the fit result with
 > the dots. The top panel (NAIVE) uses the obvious React pattern — the
 > dots come from the latest chain, the curve from whatever fit just
-> landed; they update independently. The bottom panel (GATED) uses
+> landed; they update independently. The bottom panel (ORACAUS) uses
 > `useCoherentDerivation` from the Oracaus library — the (input, output)
 > pair commits atomically.
 >
-> At the default 70 expiries × 200 strikes the surface fit takes about
-> 75 ms; ticks arrive every 20 ms at 50 Hz. Compute is roughly four times
-> the tick interval. Watch the queue depth on naive — it climbs and caps
-> at 20. The lag metric: naive at 40–45 ticks, gated at 0.
+> At the default 50 expiries × 200 strikes the surface fit lands at the
+> lower edge of the Form 2 zone (~58 ms p99 per bench); ticks arrive
+> every 20 ms at 50 Hz. Compute is roughly 3× the tick interval. Watch
+> the queue depth on naive — it climbs and caps
+> at 20. The lag metric: naive at 40–45 ticks, ORACAUS at 0.
 >
-> [if starting from a lighter setting, click EXPIRIES → 70 to show the
+> [if starting from a lighter setting, click EXPIRIES → 50 to show the
 >  failure mode appearing as the surface scale crosses the boundary]
 >
 > Look at the smile chart. Naive's red dots — those are strikes where
@@ -614,7 +626,7 @@ panel-pointing with whatever your audience is looking at.
 > curve is from an old fit. The dots are from a newer chain. They came
 > from different moments in time.
 >
-> Gated has zero red dots. Whatever's on screen is internally consistent —
+> ORACAUS has zero red dots. Whatever's on screen is internally consistent —
 > the curve was fitted to the dots that are visible.
 >
 > [click vol shock]
@@ -623,7 +635,7 @@ panel-pointing with whatever your audience is looking at.
 > across the chart tick-to-tick as the underlying surface morphs. Watch
 > naive's solid curve fail to keep up — the gap between the curve and the
 > dots opens visibly, and red dots light up at the strikes that have moved
-> most. Gated's solid curve tracks the dots one fit behind, but it
+> most. ORACAUS's solid curve tracks the dots one fit behind, but it
 > always fits the dots that are visible.
 >
 > The library doesn't make the fit faster. It doesn't make the worker
@@ -638,10 +650,10 @@ panel-pointing with whatever your audience is looking at.
 **Both panels look identical and I can't see any difference.**
 You're probably in Scenario 0 territory (small expiry count). The
 panels look identical at this absolute scale — but check the hero
-card: even here naive Σ|miss| typically sits ~25× higher than gated.
+card: even here naive Σ|miss| typically sits ~25× higher than ORACAUS.
 The visible failure mode (red dots, visible curve/dots tear) appears
-once compute exceeds the tick interval — bump EXPIRIES to 70 (default)
-or 80, or trigger vol shock.
+once compute exceeds the tick interval — bump EXPIRIES to 50 (default)
+or 70 / 80, or trigger vol shock.
 
 **Numbers fluctuate a lot between frames.**
 Expected. The IV noise (σ_iv = 0.001, 10 bps — SPX-ATM-realistic)
@@ -691,7 +703,7 @@ in preview. Vite's `base` is `/` everywhere.
   only. Post-v1 if signal demands.
 - **Worker pool** — one worker per hook instance. Pooling is post-v1.
 - **Sequential derivation chains** — one compute per substrate instance;
-  multi-stage async pipelines are out of scope. Article piece 4
+  multi-stage async pipelines are out of scope. [Article piece 4](https://www.linkedin.com/pulse/anatomy-substrate-substantive-screen-side-derivation-przemys%C5%82aw-ka%C5%82ka-iklae/)
   ("§The Substrate Isn't") describes the two compositional shapes
   available to consumers (bundle into one compute, or keep downstream
   synchronous).

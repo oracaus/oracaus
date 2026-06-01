@@ -89,7 +89,7 @@ function ToastEntry({
       // out) — less front-loaded than the previous
       // cubic-bezier(.2,.8,.2,1) which collapsed most of the visible
       // change into the first 50 ms and read as abrupt.
-      className={`transform-gpu transition-[opacity,transform] duration-250 ease-[cubic-bezier(.4,0,.2,1)] ${transformClass} ${opacityClass}`}
+      className={`transform-gpu transition-[opacity,transform] duration-250 ease-in-out ${transformClass} ${opacityClass}`}
     >
       <CommentaryToast toast={toast} />
     </div>

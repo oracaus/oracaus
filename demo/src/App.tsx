@@ -628,9 +628,29 @@ export function App() {
           tools — they live here rather than in the toolbar below). */}
       <header className="flex h-9 shrink-0 items-center justify-between border-b border-border px-5">
         <div className="flex items-baseline gap-2.5">
-          <span className="font-sans text-base font-semibold tracking-tight">
+          <a
+            href="https://oracaus.dev"
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => trackEvent("link-clicked", { target: "apex" })}
+            className="focus-ring inline-flex items-baseline gap-2 rounded-sm font-mono text-base font-semibold tracking-tight"
+          >
+            <svg
+              viewBox="0 0 18 18"
+              aria-hidden="true"
+              className="h-4 w-4 shrink-0 self-center"
+            >
+              <circle
+                cx="9"
+                cy="9"
+                r="7"
+                fill="none"
+                strokeWidth="3.2"
+                className="stroke-accent-info"
+              />
+            </svg>
             Oracaus
-          </span>
+          </a>
           <span className="whitespace-nowrap font-sans text-[11px] text-fg-muted">
             SVI vol-surface render alignment in React
           </span>

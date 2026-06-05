@@ -14,8 +14,9 @@
 // (low-opacity rect) marks where the fit is reliable; outside this range
 // SVI extrapolates and can produce arbitrage-violating IVs.
 //
-// The SVG `<g transform>` wrapper keeps tick / curve updates compositor-
-// cheap (no layout invalidation on data change). Tick math via `d3-scale`
+// The inner `<g>` carries the compositor-driven y-axis rescale (Web Animations
+// API); the per-tick data updates themselves still cost style recalc and a
+// little layout, inherent to mutating the SVG nodes. Tick math via `d3-scale`
 // (`linear().nice().ticks(N)`).
 
 import { scaleLinear } from "d3-scale";
@@ -187,10 +188,12 @@ function SmileImpl(props: SmileProps) {
   // animation on the inner chart group with two keyframes: an initial
   // transform that visually maps new positions back to where the same
   // data lived under the OLD range, and identity. The interpolation
-  // runs on the GPU compositor — zero React re-renders, zero
-  // main-thread style/layout/paint per animation frame, and crucially
-  // **no force reflow** (which the prior CSS-transition implementation
-  // required to commit the initial transform before transitioning).
+  // runs on the GPU compositor: zero React re-renders and zero
+  // main-thread style/layout/paint per animation frame. It also skips
+  // the geometry read-back a CSS transition needs to commit the start
+  // state (that read is a forced reflow, but a negligible one here:
+  // transitioning `transform` adds no layout; see the transform-box
+  // note below).
   // The animation appears in DevTools' Animations panel, making the
   // compositor-only behaviour verifiable at a glance.
   //
@@ -199,18 +202,22 @@ function SmileImpl(props: SmileProps) {
   //   ty = MARGIN.top × (1 − sy) + innerH × (oldMax − newMax) / (oldMax − oldMin)
   //
   // Applied around `transform-origin: 0 0` with `transform-box: view-box`
-  // (the SVG default for non-root `<g>`). The origin is at the SVG
-  // view-box's top-left, NOT the inner group's bounding box — view-box
-  // is fixed across content changes, fill-box would force the browser
-  // to recompute the element's bounding box whenever its content
-  // changes (200 circles × 2 panels per 5 Hz tick) which triggered
-  // unattributed document-wide reflows in earlier traces. The
+  // (the SVG default for non-root `<g>`). view-box is load-bearing for
+  // CORRECTNESS, not performance: it pins origin 0 0 to the SVG view-box's
+  // fixed top-left, which is what the ty/sy math above is derived against.
+  // Under fill-box, origin 0 0 would track the inner group's own bounding
+  // box corner, which moves with the content, and the rescale would render
+  // wrong. (We first assumed fill-box would also re-resolve that bounding
+  // box per redraw and cost layout; a controlled A/B, fill-box vs view-box
+  // including a deliberately churning bbox, showed no measurable layout or
+  // style-recalc difference. So the choice is correctness, not cost.) The
   // `MARGIN.top × (1 − sy)` term in ty compensates for the fact that
   // the chart content is offset by MARGIN.top in view-box coords via
   // the parent `<g transform="translate(...)">`.
   //
-  // Replaces the previous `useAnimatedRange` rAF approach which cost
-  // ~50 ms of main-thread work over each 300 ms transition. Reduced-
+  // Replaces the previous `useAnimatedRange` rAF approach, which
+  // re-rendered the chart on every frame of the transition (measured at
+  // roughly 2.7x the compositor handoff's main-thread cost). Reduced-
   // motion users get an instant snap (duration 0) — animation is a
   // visual aid, not load-bearing for comprehension.
   //
@@ -330,16 +337,14 @@ function SmileImpl(props: SmileProps) {
             clipPath={`url(#${clipId})`}
             style={{
               // Explicit `view-box` (the SVG default for non-root `<g>`)
-              // pivots `transform-origin: 0 0` at the SVG view-box's
-              // own top-left, NOT at the inner group's bounding box.
-              // Using `fill-box` here required the browser to recompute
-              // this element's bounding box every time its inner content
-              // changed (200 circles + path `d` per 5 Hz tick), which
-              // triggered the document-wide unattributed forced reflow
-              // visible in the Performance Insights trace. View-box has
-              // a fixed origin per render, so transform reference is
-              // stable across content updates. The MARGIN.top offset
-              // is baked into the WAAPI transform's `ty` keyframe in
+              // pivots `transform-origin: 0 0` at the SVG view-box's own
+              // top-left, NOT at the inner group's bounding box. This is a
+              // correctness requirement for the ty/sy math, not a perf
+              // optimisation: under `fill-box` the origin would track the
+              // group's moving bbox corner and the rescale would render
+              // wrong. (We A/B'd fill-box vs view-box, including a churning
+              // bbox; no measurable layout or style-recalc difference.) The
+              // MARGIN.top offset is baked into the WAAPI `ty` keyframe in
               // the useLayoutEffect above.
               transformBox: "view-box",
               transformOrigin: "0 0",

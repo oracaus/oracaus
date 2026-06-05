@@ -89,20 +89,23 @@ Trading UIs are the most demanding instance of this shape; the same failure surf
 
 The library is **a no-op when compute time stays inside the input interval** — the worker is idle between events, the queue can't accumulate, and naive composition would render coherently anyway. That's correct behaviour, not a bug; the library doesn't add latency to fast computes.
 
-It becomes load-bearing when async compute exceeds the inter-snapshot interval. Common patterns where this happens:
+It becomes load-bearing where four conditions hold at once:
 
-| Pattern                                          | Realistic example                                               |
-| ------------------------------------------------ | --------------------------------------------------------------- |
-| Heavy compute per event                          | Multi-slice vol-surface fit + Greeks + no-arb checks ≈ 30–50 ms against an option chain ticking 50–200/sec |
-| Multi-leg aggregate analytics over a streamed ladder | Per-leg book-aware metrics (margin contribution, vol-bucket exposure, correlation impact) aggregated against a streamed price ladder; ≈ 20–40 ms per refresh; vertical tearing along the streamed/derived split |
-| Mixed streaming + intent feeding heavy compute   | Streaming chain at 50 Hz + slider drag on expiry-count or scenario parameter; both feed a 30–100 ms compute; the architectural shape the two-input-kind dispatch was designed for |
-| Scenario revaluation against ticked positions    | 100 scenarios × per-scenario pricing = 50 ms–1 s against a portfolio ticking at ~50 ms; aggregate staleness against the visible positions |
-| Interactive GPU-accelerated Monte Carlo          | 100k-path P&L surface on consumer GPU at 30–200 ms per dispatch; slider-driven perturbation grid against streaming market data; the two-input-kind dispatch maps onto this directly |
-| Streaming-input ML inference                     | Anomaly scoring on a streaming sensor feed; classification over a sliding feature window; small models, 20–200 ms forward pass |
-| Interactive client-side filtering + aggregation  | Ad-hoc re-compute over a 60-second filtered span buffer (APM-class tool); 40–80 ms per refresh on heavy filter changes |
-| Slow client                                      | Same code; 1 ms on developer M-series Mac → 50 ms on user budget Android; crosses the inter-snapshot interval threshold only on the user's device |
+1. **Canonical streaming state lives upstream** — a market-data feed, an option chain, a ticking position book the middle tier serves to every consumer.
+2. **The compute is personalised and interactive** — a per-user fit, scenario set, or structure that can't sit server-side at per-user scale without forcing the middle tier to compute N views per tick.
+3. **A human reads the result and acts on it** — quotes, hedges, adjusts skew, sizes a structure, sets a limit — fast enough and with enough at stake that a frame composing output against inputs that have already moved is a *costly error*, not a cosmetic flicker.
+4. **The compute is heavy enough that coarse gating can't save you** — throttling inputs to a slower cadence shrinks the collision window but doesn't close it once the compute itself exceeds the gating interval.
 
-The threshold isn't fixed at 16 ms — the React frame budget is single-digit ms in practice (browser + scheduler take their share of the 16 ms / 8 ms frame interval), and the library's domain is async compute past the **inter-snapshot interval** (≈ 20 ms at 50 Hz inputs; ≈ 10 ms at 100 Hz). The boundary is empirical and shifts with cadence, fan-out, and scale.
+Trading and risk surfaces are the wedge: the most demanding instance of this shape, and where the proof cases live. The pattern generalises to any real-time interface that meets all four conditions — but where it doesn't (compute the middle tier could do cheaply; a frame only ever glanced at, never acted on; coarse gating that's good enough), coherence is a convenience, not a correctness property, and you don't need this.
+
+| Pattern | Realistic example | Why coherence is correctness here |
+| --- | --- | --- |
+| Vol-surface fit + Greeks (market-maker surface) | Multi-slice raw-SVI fit + Greeks + no-arb ≈ 30–50 ms against an option chain ticking 50–200/sec | The trader adjusts skew, widens, or pulls off the displayed surface; one fitted to a chain that has already moved drives a mis-judged intervention — this is the demo |
+| Scenario revaluation against ticked positions | 100 custom scenarios × per-scenario pricing = 50 ms–1 s against a portfolio ticking at ~50 ms | The risk manager hedges and sets limits off the stress aggregate; the compute exceeds any gating interval, so coalescing *can't* close the window — only coherent commit can |
+| Interactive GPU Monte Carlo (what-if P&L surface) | 100k-path P&L surface on a consumer GPU at 30–200 ms/dispatch; slider-driven perturbation grid against streaming market data | A surface whose perturbation grid disagrees with the (spot, vol) the run used is a chimera P&L for a tuple that never existed at any instant |
+| Multi-leg aggregate over a streamed ladder | Per-leg book-aware metrics (margin, vol-bucket exposure, correlation) against a streamed price ladder; ≈ 20–40 ms | The structurer prices off the aggregate; vertical tearing along the streamed/derived split misstates the structure's margin at the moment of the decision |
+
+The threshold isn't fixed at 16 ms — the React frame budget is single-digit ms in practice (browser + scheduler take their share of the 16 ms / 8 ms frame interval), and the library's domain is async compute past the **inter-snapshot interval** (≈ 20 ms at 50 Hz inputs; ≈ 10 ms at 100 Hz). The boundary is empirical and device-relative: the same compute that's 1 ms on a developer's M-series Mac can be 50 ms on a user's budget Android, crossing the threshold only on the slower device. It shifts with cadence, fan-out, and scale.
 
 The [demo](https://demo.oracaus.dev) is the easiest way to feel this. Two selectors: per-tick compute (~15 ms → ~92 ms p99 across 12 → 80 expiries) and inter-snapshot interval (20 ms → 2 ms across 50 → 500 Hz). Naive tears when compute exceeds interval — steady at defaults (~58 ms vs 20 ms), dramatic at the upper corner (~92 ms vs 2 ms).
 

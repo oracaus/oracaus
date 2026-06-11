@@ -524,6 +524,35 @@ export function App() {
     [gatedPanelState.data],
   );
 
+  // Ground-truth fit error inputs. Unlike the coherence tables above, BOTH
+  // panels draw from their own committed snapshot (`data.sourceSlice` +
+  // `data.sourceTrueParams`) — for NAIVE that is deliberately the fit's own
+  // tick, NOT `latestInputs` (the current dots). Measuring the committed fit
+  // against the truth it was actually fitting isolates fitter quality from
+  // the staleness tear, so the number reads ~equal on both panels.
+  const naiveTruth = useMemo(
+    () => ({
+      slice: naivePanelState.data?.sourceSlice,
+      params:
+        naivePanelState.data?.fitResult.ok === true
+          ? naivePanelState.data.fitResult.params
+          : undefined,
+      trueParams: naivePanelState.data?.sourceTrueParams,
+    }),
+    [naivePanelState.data],
+  );
+  const gatedTruth = useMemo(
+    () => ({
+      slice: gatedPanelState.data?.sourceSlice,
+      params:
+        gatedPanelState.data?.fitResult.ok === true
+          ? gatedPanelState.data.fitResult.params
+          : undefined,
+      trueParams: gatedPanelState.data?.sourceTrueParams,
+    }),
+    [gatedPanelState.data],
+  );
+
   // Σ|miss| values for the sparkline. Sampled inside MismarkSparkline
   // at its own cadence (500 ms); we just supply the current value each
   // render. Memoised so identity is stable when the underlying data
@@ -633,7 +662,7 @@ export function App() {
             target="_blank"
             rel="noreferrer"
             onClick={() => trackEvent("link-clicked", { target: "apex" })}
-            className="focus-ring inline-flex items-baseline gap-2 rounded-sm font-mono text-base font-semibold tracking-tight"
+            className="focus-ring inline-flex items-baseline gap-1.5 rounded-sm font-mono text-base font-semibold tracking-tight"
           >
             <svg
               viewBox="0 0 18 18"
@@ -847,6 +876,8 @@ export function App() {
             <OptionChainTable
               naive={naiveTable}
               gated={gatedTable}
+              naiveTruth={naiveTruth}
+              gatedTruth={gatedTruth}
               hoveredK={hoveredK}
               onHoverChange={setHoveredK}
             />

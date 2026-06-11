@@ -23,6 +23,8 @@ import { memo, useMemo } from "react";
 
 import {
   computeMisses,
+  computeTruthMisses,
+  type GroundTruthPanelData,
   type PanelData,
   summariseMisses,
 } from "../svi-mismark.js";
@@ -41,6 +43,14 @@ export type { PanelData };
 export type OptionChainTableProps = {
   readonly naive: PanelData;
   readonly gated: PanelData;
+  /**
+   * Ground-truth fit error inputs — the committed fit measured against the
+   * TRUE surface at its own snapshot, per panel. Reads ~equal on both panels
+   * and unmoved by the shock (the fitter's residual, not the tear), so it is
+   * the falsifiable companion to the divergent coherence number above.
+   */
+  readonly naiveTruth: GroundTruthPanelData;
+  readonly gatedTruth: GroundTruthPanelData;
   /**
    * Cross-view hover state — log-moneyness currently hovered in either
    * smile or here. App-owned. When non-null and matching a row's `k`,
@@ -105,6 +115,8 @@ function MissCell({ miss }: { miss: number | undefined }) {
 export const OptionChainTable = memo(function OptionChainTable({
   naive,
   gated,
+  naiveTruth,
+  gatedTruth,
   hoveredK,
   onHoverChange,
 }: OptionChainTableProps) {
@@ -122,6 +134,18 @@ export const OptionChainTable = memo(function OptionChainTable({
   }, [naiveRows, gatedRows]);
   const naiveSummary = useMemo(() => summariseMisses(naiveRows), [naiveRows]);
   const gatedSummary = useMemo(() => summariseMisses(gatedRows), [gatedRows]);
+
+  // Ground-truth fit error — fit vs the TRUE surface at each panel's own
+  // snapshot. Near-equal across panels and unmoved by the shock; the
+  // "this is the fitter, not the tear" baseline beside the coherence number.
+  const naiveTruthSummary = useMemo(
+    () => summariseMisses(computeTruthMisses(naiveTruth)),
+    [naiveTruth],
+  );
+  const gatedTruthSummary = useMemo(
+    () => summariseMisses(computeTruthMisses(gatedTruth)),
+    [gatedTruth],
+  );
 
   // Nearest-row index for the hover highlight. Computed once per render
   // rather than per-row inside the map. Returns the row whose `k` is
@@ -181,13 +205,13 @@ export const OptionChainTable = memo(function OptionChainTable({
             label="NAIVE"
             tone="stale"
             value={naiveSummary?.sum}
-            max={naiveSummary?.max}
+            truth={naiveTruthSummary?.sum}
           />
           <HeroValue
             label="ORACAUS"
             tone="ok"
             value={gatedSummary?.sum}
-            max={gatedSummary?.max}
+            truth={gatedTruthSummary?.sum}
           />
         </div>
         {/* Bar container is rendered unconditionally so its height is
@@ -277,16 +301,21 @@ export const OptionChainTable = memo(function OptionChainTable({
   );
 });
 
+// Big number = coherence error (fit vs observed quotes, the divergent
+// tear). Small line = ground-truth fit error (fit vs the true surface at
+// its own snapshot) — near-equal across panels, the fitter's own residual.
+// The contrast is the point: NAIVE's coherence dwarfs its fit error; ORACAUS's
+// coherence ≈ its fit error; and the fit error itself matches across both.
 function HeroValue({
   label,
   tone,
   value,
-  max,
+  truth,
 }: {
   label: string;
   tone: "ok" | "stale";
   value: number | undefined;
-  max: number | undefined;
+  truth: number | undefined;
 }) {
   const valueColor = tone === "ok" ? "text-accent-ok" : "text-accent-stale";
   return (
@@ -302,9 +331,9 @@ function HeroValue({
         {value === undefined ? "—" : `${(value * 100).toFixed(2)}%`}
       </span>
       <span className="font-mono text-[10px] uppercase tracking-wide text-fg-muted">
-        max{" "}
+        vs truth{" "}
         <span className="tabular-nums">
-          {max === undefined ? "—" : `${(max * 100).toFixed(2)}%`}
+          {truth === undefined ? "—" : `${(truth * 100).toFixed(2)}%`}
         </span>
       </span>
     </div>

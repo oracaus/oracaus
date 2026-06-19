@@ -431,17 +431,36 @@ export class SyntheticFeed {
 export type FeedSession = {
   readonly seed: number;
   readonly recording: boolean;
+  /**
+   * Initial feed tick rate in Hz, from `?rate=<n>`. Lets a capture or
+   * recording take open straight at e.g. 500 Hz without touching the toolbar,
+   * and survive the reload Lighthouse forces (the toolbar setting is React
+   * state and resets on reload; the URL param does not). Clamped to
+   * [1, 1000]; defaults to 50.
+   */
+  readonly tickRateHz: number;
 };
 
+const DEFAULT_TICK_RATE_HZ = 50;
+
 export function readFeedSession(): FeedSession {
-  if (typeof window === "undefined") return { seed: 42, recording: false };
+  if (typeof window === "undefined") {
+    return { seed: 42, recording: false, tickRateHz: DEFAULT_TICK_RATE_HZ };
+  }
   const params = new URLSearchParams(window.location.search);
   const seedRaw = params.get("seed");
   const seed = seedRaw !== null ? Number.parseInt(seedRaw, 10) : 42;
   const recording = params.get("mode") === "recording";
+  const rateRaw = params.get("rate");
+  const rateParsed =
+    rateRaw !== null ? Number.parseInt(rateRaw, 10) : Number.NaN;
+  const tickRateHz = Number.isFinite(rateParsed)
+    ? Math.min(1000, Math.max(1, rateParsed))
+    : DEFAULT_TICK_RATE_HZ;
   return {
     seed: Number.isFinite(seed) ? seed : 42,
     recording,
+    tickRateHz,
   };
 }
 

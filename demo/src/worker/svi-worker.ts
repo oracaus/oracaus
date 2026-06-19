@@ -73,7 +73,17 @@ self.addEventListener("message", (event: MessageEvent<WorkerInbound>) => {
         streaming: DemoSurfaceInput;
         intent: DemoIntent | undefined;
       };
+      // User Timing bracket so each fit shows as a labelled "svi-fit" measure
+      // on the Worker track of a Performance recording (DevTools emits the
+      // trace event when `measure()` is called). Marks and measures are
+      // cleared each call so the user-timing buffer — and with it the
+      // worker's JS heap — stays flat over a long session; the already-emitted
+      // trace event survives the clear.
+      performance.mark("svi-fit:start");
       const output = computeSurface(wrapped.streaming, wrapped.intent);
+      performance.measure("svi-fit", "svi-fit:start");
+      performance.clearMarks("svi-fit:start");
+      performance.clearMeasures("svi-fit");
       outbound = {
         type: "result",
         id: inbound.id,

@@ -32,7 +32,18 @@ const umamiPlugin: Plugin = {
 // subdomain root `https://demo.oracaus.dev` via the CNAME in
 // `demo/public/CNAME`, so there's no subpath. Dev and preview both
 // serve at localhost root too — no mode-conditional needed.
-export default defineConfig({
+//
+// `--mode profiling` (npm run build:profiling) swaps react-dom for its
+// profiling build: a production-grade (minified, optimised) bundle that keeps
+// the React DevTools Profiler / Timeline instrumentation enabled. One capture
+// build then serves every DevTools shot — representative numbers AND a working
+// Profiler — instead of switching between a dev build (for the Profiler) and a
+// production build (for the numbers). The default `npm run build` (the deploy)
+// is untouched: a clean production bundle with no profiler overhead. The app
+// imports `createRoot` from `react-dom/client`, so the alias targets that
+// specifier (not bare `react-dom`); `react-dom/profiling` re-exports the full
+// client surface, `createRoot` included.
+export default defineConfig(({ mode }) => ({
   base: "/",
   plugins: [react(), tailwindcss(), umamiPlugin],
   resolve: {
@@ -43,6 +54,9 @@ export default defineConfig({
         dirname,
         "../packages/coherent-derivation/src/index.ts",
       ),
+      ...(mode === "profiling"
+        ? { "react-dom/client": "react-dom/profiling" }
+        : {}),
     },
   },
   build: {
@@ -52,4 +66,4 @@ export default defineConfig({
   worker: {
     format: "es",
   },
-});
+}));

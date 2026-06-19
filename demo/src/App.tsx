@@ -299,7 +299,7 @@ export function App() {
 
   const feed = useFeed({
     seed,
-    initialTickRateHz: 50,
+    initialTickRateHz: sessionFromUrl.tickRateHz,
     nExpiriesFitted,
     nStrikesPerSlice: N_STRIKES_PER_SLICE,
   });

@@ -14,10 +14,11 @@
 // (low-opacity rect) marks where the fit is reliable; outside this range
 // SVI extrapolates and can produce arbitrage-violating IVs.
 //
-// The inner `<g>` carries the compositor-driven y-axis rescale (Web Animations
-// API); the per-tick data updates themselves still cost style recalc and a
-// little layout, inherent to mutating the SVG nodes. Tick math via `d3-scale`
-// (`linear().nice().ticks(N)`).
+// The y-axis rescale animates `transform` on an HTML wrapper around the
+// interior SVG (so the compositor can run it; an SVG `<g>` transform can't be
+// composited). The per-tick data updates themselves still cost style recalc
+// and a little layout, inherent to mutating the SVG nodes. Tick math via
+// `d3-scale` (`linear().nice().ticks(N)`).
 
 import { scaleLinear } from "d3-scale";
 import {
@@ -182,59 +183,46 @@ function SmileImpl(props: SmileProps) {
   // strip them defensively for the widest browser support.
   const clipId = `smile-clip-${useId().replace(/:/g, "")}`;
 
-  // Compositor-only y-axis transition via the Web Animations API. When
-  // `yRange` changes (maturity switch or envelope expansion), Smile
-  // re-renders content at the NEW range immediately, then runs a WAAPI
-  // animation on the inner chart group with two keyframes: an initial
-  // transform that visually maps new positions back to where the same
-  // data lived under the OLD range, and identity. The interpolation
-  // runs on the GPU compositor: zero React re-renders and zero
-  // main-thread style/layout/paint per animation frame. It also skips
-  // the geometry read-back a CSS transition needs to commit the start
-  // state (that read is a forced reflow, but a negligible one here:
-  // transitioning `transform` adds no layout; see the transform-box
-  // note below).
-  // The animation appears in DevTools' Animations panel, making the
-  // compositor-only behaviour verifiable at a glance.
+  // Y-axis rescale, handed to the compositor. When `yRange` changes
+  // (maturity switch or envelope expansion) the interior layer re-renders
+  // at the NEW range immediately; we then animate `transform` from a value
+  // that makes the new layout *look like* the old range back to identity.
+  // This replaces an earlier rAF approach that re-rendered the chart on
+  // every frame of the transition.
   //
-  // The math (derived analytically):
+  // The animated element is an HTML <div> (the interior layer), NOT an SVG
+  // node. This is load-bearing: Chrome composites transform animations on
+  // HTML / replaced elements but not on SVG child elements — a `<g>`
+  // transform here reports `compositeFailed` and falls back to per-frame
+  // main-thread layout (the layout spikes this structure removes). On the
+  // HTML wrapper the two pure-`transform` keyframes interpolate on the
+  // compositor: no React re-render, no per-frame style/layout/paint.
+  // (Caveat to "it shows in the Animations panel, so it's composited": a
+  // non-composited WAAPI animation appears there too — the `compositeFailed`
+  // flag in a trace is the real check.)
+  //
+  // The math (derived analytically) is unchanged by the move: the wrapper
+  // sits `inset-0` over the base SVG, so its border-box origin coincides
+  // with the view-box origin, and with `transform-origin: 0 0`:
   //   sy = (newMax − newMin) / (oldMax − oldMin)
   //   ty = MARGIN.top × (1 − sy) + innerH × (oldMax − newMax) / (oldMax − oldMin)
+  // The `MARGIN.top × (1 − sy)` term compensates for the content's
+  // MARGIN.top offset inside the layer.
   //
-  // Applied around `transform-origin: 0 0` with `transform-box: view-box`
-  // (the SVG default for non-root `<g>`). view-box is load-bearing for
-  // CORRECTNESS, not performance: it pins origin 0 0 to the SVG view-box's
-  // fixed top-left, which is what the ty/sy math above is derived against.
-  // Under fill-box, origin 0 0 would track the inner group's own bounding
-  // box corner, which moves with the content, and the rescale would render
-  // wrong. (We first assumed fill-box would also re-resolve that bounding
-  // box per redraw and cost layout; a controlled A/B, fill-box vs view-box
-  // including a deliberately churning bbox, showed no measurable layout or
-  // style-recalc difference. So the choice is correctness, not cost.) The
-  // `MARGIN.top × (1 − sy)` term in ty compensates for the fact that
-  // the chart content is offset by MARGIN.top in view-box coords via
-  // the parent `<g transform="translate(...)">`.
-  //
-  // Replaces the previous `useAnimatedRange` rAF approach, which
-  // re-rendered the chart on every frame of the transition (measured at
-  // roughly 2.7x the compositor handoff's main-thread cost). Reduced-
-  // motion users get an instant snap (duration 0) — animation is a
-  // visual aid, not load-bearing for comprehension.
-  //
-  // Note on shape distortion: scaleY visually stretches dots into ovals
-  // and curves vertically during the transition. This is correct
-  // semantically — it represents the y-axis zoom — and matches the
-  // visual idiom every chart library uses for the same transition.
-  // After 300 ms the transform is identity and shapes are normal.
-  const innerGroupRef = useRef<SVGGElement>(null);
+  // Reduced-motion users get an instant snap (duration 0) — the motion is
+  // a visual aid, not load-bearing. scaleY stretches dots and curve
+  // vertically during the 300 ms transition (the y-axis zoom; the idiom
+  // every chart library uses). On the compositor the layer texture scales,
+  // so a large jump softens for the transition, then resolves crisp at rest.
+  const interiorLayerRef = useRef<HTMLDivElement>(null);
   const prevYRangeRef = useRef<readonly [number, number]>([yRange0, yRange1]);
   const animationRef = useRef<Animation | null>(null);
 
   useLayoutEffect(() => {
     const prev = prevYRangeRef.current;
     if (prev[0] === yRange0 && prev[1] === yRange1) return;
-    const group = innerGroupRef.current;
-    if (group === null) return;
+    const layer = interiorLayerRef.current;
+    if (layer === null) return;
 
     const [oldMin, oldMax] = prev;
     const span = oldMax - oldMin;
@@ -256,7 +244,11 @@ function SmileImpl(props: SmileProps) {
     // demo's user-button-triggered maturity selector, but correct).
     animationRef.current?.cancel();
 
-    animationRef.current = group.animate(
+    // Promote the interior layer to its own compositor texture for the
+    // transition, then drop the hint on completion so a 200-node layer
+    // isn't pinned to GPU memory at rest.
+    layer.style.willChange = "transform";
+    const animation = layer.animate(
       [
         { transform: `translateY(${ty}px) scaleY(${sy})` },
         { transform: "translateY(0px) scaleY(1)" },
@@ -264,12 +256,17 @@ function SmileImpl(props: SmileProps) {
       {
         duration: prefersReducedMotion ? 0 : 300,
         easing: "cubic-bezier(.4, 0, .2, 1)",
-        // `fill: "forwards"` keeps the final transform applied after
-        // completion — the element stays at identity until the next
-        // animation runs.
+        // `fill: "forwards"` keeps the final transform (identity) applied
+        // after completion until the next animation runs.
         fill: "forwards",
       },
     );
+    const clearHint = (): void => {
+      layer.style.willChange = "";
+    };
+    animation.onfinish = clearHint;
+    animation.oncancel = clearHint;
+    animationRef.current = animation;
 
     prevYRangeRef.current = [yRange0, yRange1];
   }, [yRange0, yRange1, innerH]);
@@ -283,24 +280,27 @@ function SmileImpl(props: SmileProps) {
   }, []);
 
   return (
-    // Wrapper div hosts the SVG and the HTML hover overlay as siblings.
-    // The overlay can't live inside the SVG: `backdrop-filter` doesn't
-    // apply to SVG elements in current browsers (`BackgroundImage` was
-    // dropped from Chromium years ago). Placing the overlay as an
-    // absolutely-positioned HTML sibling restores backdrop-blur as a
-    // compositor effect (Chromium 76+, Safari 9+) while keeping the
-    // chart itself in SVG.
+    // Wrapper div stacks three layers: the base SVG (axes/grid), the
+    // animated interior layer (dots/curve/cursor), and the HTML hover
+    // overlay. The overlay can't live inside an SVG: `backdrop-filter`
+    // doesn't apply to SVG elements in current browsers (`BackgroundImage`
+    // was dropped from Chromium years ago). Placing it as an absolutely-
+    // positioned HTML sibling restores backdrop-blur as a compositor effect
+    // (Chromium 76+, Safari 9+) while keeping the chart itself in SVG.
     //
-    // Pointer handlers attach to the wrapper, not the SVG. The overlay
-    // sets `pointer-events: none` so events tunnel through to the
-    // wrapper, where the bounding rect (identical to the SVG's, since
-    // the SVG fills the wrapper) drives the x → k inversion.
+    // Pointer handlers attach to the wrapper, not the layers. The interior
+    // layer and overlay both set `pointer-events: none` so events reach the
+    // wrapper, whose bounding rect (it is sized to the chart) drives the
+    // x → k inversion.
     <div
       className="relative"
       style={{ width, height, cursor: "crosshair" }}
       onPointerMove={handlePointerMove}
       onPointerLeave={handlePointerLeave}
     >
+      {/* Base layer — static grid, axes, ticks and labels. Never
+          transformed by the rescale, so it stays in plain SVG and never
+          repaints during a transition. */}
       <svg
         viewBox={`0 0 ${width} ${height}`}
         width={width}
@@ -309,17 +309,6 @@ function SmileImpl(props: SmileProps) {
         aria-label="SVI smile plot"
         style={{ display: "block" }}
       >
-        {/* ClipPath confines the dots, curves, and hover cursor to the
-            inner chart rectangle so they don't bleed above or below
-            during y-range transitions (maturity change / envelope
-            expansion) or when out-of-domain IVs briefly appear before
-            the sticky range catches up. Axes/grid stay outside the
-            clip so labels remain readable. */}
-        <defs>
-          <clipPath id={clipId}>
-            <rect x={0} y={0} width={innerW} height={innerH} />
-          </clipPath>
-        </defs>
         <g transform={`translate(${MARGIN.left},${MARGIN.top})`}>
           {/* Static structure — grid, axes, ticks, labels. Memoised so
               it doesn't reconcile when only the curve / dots change. */}
@@ -331,26 +320,44 @@ function SmileImpl(props: SmileProps) {
             innerW={innerW}
             innerH={innerH}
           />
+        </g>
+      </svg>
 
-          <g
-            ref={innerGroupRef}
-            clipPath={`url(#${clipId})`}
-            style={{
-              // Explicit `view-box` (the SVG default for non-root `<g>`)
-              // pivots `transform-origin: 0 0` at the SVG view-box's own
-              // top-left, NOT at the inner group's bounding box. This is a
-              // correctness requirement for the ty/sy math, not a perf
-              // optimisation: under `fill-box` the origin would track the
-              // group's moving bbox corner and the rescale would render
-              // wrong. (We A/B'd fill-box vs view-box, including a churning
-              // bbox; no measurable layout or style-recalc difference.) The
-              // MARGIN.top offset is baked into the WAAPI `ty` keyframe in
-              // the useLayoutEffect above.
-              transformBox: "view-box",
-              transformOrigin: "0 0",
-            }}
-          >
-            {/* Cross-view hover cursor — vertical line at the hovered k.
+      {/* Interior layer — dots, fitted curve and hover cursor. Wrapped in
+          an HTML <div> so the y-axis rescale animates `transform` on an
+          element the compositor can promote to its own layer. SVG child
+          elements can't be composited (a `<g>` transform reported
+          `compositeFailed` and fell back to per-frame main-thread layout);
+          an HTML / replaced element can. The div sits `inset-0` over the
+          base SVG, so its border-box origin coincides with the view-box
+          origin and, with `transform-origin: 0 0`, the layout effect's
+          translateY/scaleY maths apply unchanged. `pointer-events: none`
+          lets pointer events fall through to the wrapper, which owns the
+          x → k inversion. */}
+      <div
+        ref={interiorLayerRef}
+        className="absolute inset-0"
+        style={{ pointerEvents: "none", transformOrigin: "0 0" }}
+      >
+        <svg
+          viewBox={`0 0 ${width} ${height}`}
+          width={width}
+          height={height}
+          aria-hidden="true"
+          style={{ display: "block" }}
+        >
+          {/* ClipPath confines the dots, curve and hover cursor to the
+              inner chart rect so they don't bleed into the axis margins
+              during a rescale or when out-of-domain IVs briefly appear
+              before the sticky range catches up. */}
+          <defs>
+            <clipPath id={clipId}>
+              <rect x={0} y={0} width={innerW} height={innerH} />
+            </clipPath>
+          </defs>
+          <g transform={`translate(${MARGIN.left},${MARGIN.top})`}>
+            <g clipPath={`url(#${clipId})`}>
+              {/* Cross-view hover cursor — vertical line at the hovered k.
                 Rendered before the curves so they sit visually on top.
                 `hoveredK` is App-owned state; the same line appears on
                 both smiles (and corresponds to the highlighted row in
@@ -358,27 +365,27 @@ function SmileImpl(props: SmileProps) {
                 hover. Stroke colour reinforces panel identity: red on
                 NAIVE, green on ORACAUS — same as the chip rail and
                 panel-header accents. */}
-            {props.hoveredK !== null &&
-              props.hoveredK >= xRange0 &&
-              props.hoveredK <= xRange1 && (
-                <line
-                  x1={x(props.hoveredK)}
-                  x2={x(props.hoveredK)}
-                  y1={0}
-                  y2={innerH}
-                  stroke={
-                    props.cursorTone === "stale"
-                      ? CURSOR_STROKE_STALE
-                      : CURSOR_STROKE_OK
-                  }
-                  strokeWidth={1}
-                  strokeDasharray="2 2"
-                  opacity={0.75}
-                  pointerEvents="none"
-                />
-              )}
+              {props.hoveredK !== null &&
+                props.hoveredK >= xRange0 &&
+                props.hoveredK <= xRange1 && (
+                  <line
+                    x1={x(props.hoveredK)}
+                    x2={x(props.hoveredK)}
+                    y1={0}
+                    y2={innerH}
+                    stroke={
+                      props.cursorTone === "stale"
+                        ? CURSOR_STROKE_STALE
+                        : CURSOR_STROKE_OK
+                    }
+                    strokeWidth={1}
+                    strokeDasharray="2 2"
+                    opacity={0.75}
+                    pointerEvents="none"
+                  />
+                )}
 
-            {/* Observed quotes — dots. tornStrikes flags red on naive panel
+              {/* Observed quotes — dots. tornStrikes flags red on naive panel
                 when curve and dot disagree by more than the threshold.
                 Rendered before the fit curve so the curve sits ON TOP of
                 the dots — at 200 strikes the dots form a near-continuous
@@ -388,35 +395,38 @@ function SmileImpl(props: SmileProps) {
                 the dot field, and the dots remain visible around the
                 ribbon. When NAIVE under shock tears, dots and fit
                 separate spatially — both fully visible. */}
-            {quotes.map((q, i) => {
-              const torn = props.tornStrikes?.[i] ?? false;
-              return (
-                <circle
-                  key={`q-${q.k.toFixed(4)}`}
-                  cx={x(q.k)}
-                  cy={y(q.iv)}
-                  r={2.5}
-                  fill={torn ? "oklch(0.66 0.20 28)" : "oklch(0.94 0.008 240)"}
-                  stroke={
-                    torn ? "oklch(0.66 0.20 28)" : "oklch(0.30 0.014 240)"
-                  }
-                  strokeWidth={0.5}
-                />
-              );
-            })}
+              {quotes.map((q, i) => {
+                const torn = props.tornStrikes?.[i] ?? false;
+                return (
+                  <circle
+                    key={`q-${q.k.toFixed(4)}`}
+                    cx={x(q.k)}
+                    cy={y(q.iv)}
+                    r={2.5}
+                    fill={
+                      torn ? "oklch(0.66 0.20 28)" : "oklch(0.94 0.008 240)"
+                    }
+                    stroke={
+                      torn ? "oklch(0.66 0.20 28)" : "oklch(0.30 0.014 240)"
+                    }
+                    strokeWidth={0.5}
+                  />
+                );
+              })}
 
-            {/* Fitted curve (accent-info blue solid) — the panel's recovered SVI. */}
-            {fittedPath !== "" && (
-              <path
-                d={fittedPath}
-                fill="none"
-                stroke="oklch(0.70 0.13 230)"
-                strokeWidth={1.5}
-              />
-            )}
+              {/* Fitted curve (accent-info blue solid) — the panel's recovered SVI. */}
+              {fittedPath !== "" && (
+                <path
+                  d={fittedPath}
+                  fill="none"
+                  stroke="oklch(0.70 0.13 230)"
+                  strokeWidth={1.5}
+                />
+              )}
+            </g>
           </g>
-        </g>
-      </svg>
+        </svg>
+      </div>
 
       {/* HTML hover overlay — sibling to the SVG, absolutely positioned
           at the top-left of the chart's INNER area (inside the
